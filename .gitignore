@@ -1,0 +1,11 @@
+# Upstream gonka clone (not ours; has its own git history)
+repo/
+
+# OS / editor noise
+.DS_Store
+**/.DS_Store
+
+# Obsidian volatile UI state (keep portable config, drop per-machine state)
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/cache
