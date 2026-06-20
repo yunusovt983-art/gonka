@@ -1,0 +1,43 @@
+name: Multi-Platform Build
+
+on:
+  pull_request:
+    branches:
+      - '**'
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.2'
+
+      # Only do aggressive cleanup on trusted pushes
+      - name: Free up disk space on runner
+        if: github.event_name == 'push'
+        run: |
+          echo "=== Disk Space Before Cleanup ==="
+          df -h
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker system prune -af --volumes
+          sudo apt-get clean
+          echo "=== Disk Space After Cleanup ==="
+          df -h
+
+      - name: Run Makefile build
+        run: make build-for-upgrade

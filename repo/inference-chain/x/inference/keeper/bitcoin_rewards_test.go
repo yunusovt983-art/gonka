@@ -1,0 +1,2202 @@
+package keeper
+
+import (
+	"fmt"
+	"math"
+	"math/big"
+	"testing"
+
+	"cosmossdk.io/log"
+	"github.com/productscience/inference/x/inference/types"
+	"github.com/shopspring/decimal"
+	"github.com/stretchr/testify/require"
+)
+
+// createTestLogger creates a logger for testing
+func createTestLogger(t *testing.T) log.Logger {
+	return log.NewTestLogger(t)
+}
+
+// modelNodesFromVW builds participantMLNodes from ValidationWeights for single-model tests.
+func modelNodesFromVW(vws []*types.ValidationWeight) map[string]map[string][]*types.MLNodeInfo {
+	result := make(map[string]map[string][]*types.MLNodeInfo)
+	for _, vw := range vws {
+		if len(vw.MlNodes) > 0 {
+			result[vw.MemberAddress] = map[string][]*types.MLNodeInfo{"model-a": vw.MlNodes}
+		} else if vw.Weight > 0 {
+			result[vw.MemberAddress] = map[string][]*types.MLNodeInfo{
+				"model-a": {{PocWeight: vw.Weight}},
+			}
+		}
+	}
+	return result
+}
+
+func modelNodesAndScales(data *types.EpochGroupData) map[string]map[string][]*types.MLNodeInfo {
+	if data == nil {
+		return nil
+	}
+	if len(data.ConfirmationWeightScales) == 0 {
+		data.ConfirmationWeightScales = []*types.ConfirmationWeightScale{
+			{ModelId: "model-a", WeightScaleFactor: types.DecimalFromFloat(1)},
+		}
+	}
+	return modelNodesFromVW(data.ValidationWeights)
+}
+
+// createTestValidationWeight creates a ValidationWeight with proper MLNode structure for testing
+func createTestValidationWeight(memberAddress string, weight int64, reputation int32) *types.ValidationWeight {
+	return &types.ValidationWeight{
+		MemberAddress:      memberAddress,
+		Weight:             weight,
+		Reputation:         reputation,
+		ConfirmationWeight: weight, // For tests, assume all weight is confirmed
+		MlNodes: []*types.MLNodeInfo{
+			{
+				NodeId:             memberAddress + "-node",
+				PocWeight:          weight,
+				TimeslotAllocation: []bool{true, false}, // POC_SLOT=false
+			},
+		},
+	}
+}
+
+func TestExponent(t *testing.T) {
+	tests := []struct {
+		name      string
+		decayRate decimal.Decimal
+	}{
+		{
+			name:      "Standard decay rate -0.000475",
+			decayRate: decimal.New(-475, -6),
+		},
+		{
+			name:      "Small positive decay rate",
+			decayRate: decimal.New(1, -4),
+		},
+		{
+			name:      "Very small decay rate",
+			decayRate: decimal.New(-1, -6),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			exponent, err := types.GetExponent(tt.decayRate)
+			require.NoError(t, err)
+			roughExponent := math.Exp(tt.decayRate.InexactFloat64())
+			require.Equal(t, roughExponent, exponent.InexactFloat64())
+		})
+	}
+}
+
+func TestFixedEpochRewardPrecise(t *testing.T) {
+	// Test parameters matching Bitcoin proposal defaults
+	initialReward := uint64(285000000000000)
+	decayRate := types.DecimalFromFloat(-0.000475) // Halving every ~1460 epochs (4 years)
+
+	tests := []struct {
+		name               string
+		epochsSinceGenesis uint64
+		expectedReward     uint64 // Approximate expected values (to be corrected)
+	}{
+		{
+			name:               "Zero epochs",
+			epochsSinceGenesis: 0,
+			expectedReward:     285000000000000, // Initial reward
+		},
+		{
+			name:               "100 epochs",
+			epochsSinceGenesis: 100,
+			expectedReward:     271778984842800, // ~95% of initial (guess)
+		},
+		{
+			name:               "500 epochs",
+			epochsSinceGenesis: 500,
+			expectedReward:     224750113929613, // ~77% of initial (guess)
+		},
+		{
+			name:               "1000 epochs",
+			epochsSinceGenesis: 1000,
+			expectedReward:     177237241092541, // ~63% of initial (guess)
+		},
+		{
+			name:               "1460 epochs (first halving)",
+			epochsSinceGenesis: 1460,
+			expectedReward:     142449732098072, // ~50% of initial (halving)
+		},
+		{
+			name:               "2920 epochs (second halving)",
+			epochsSinceGenesis: 2920,
+			expectedReward:     71199740964254, // ~25% of initial (two halvings)
+		},
+		{
+			name:               "5000 epochs",
+			epochsSinceGenesis: 5000,
+			expectedReward:     26509129425046, // ~10% of initial (guess)
+		},
+		{
+			name:               "10000 epochs",
+			epochsSinceGenesis: 10000,
+			expectedReward:     2465733132890, // ~0.9% of initial (guess)
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := CalculateFixedEpochReward(tt.epochsSinceGenesis, initialReward, decayRate)
+			require.NoError(t, err)
+			require.Equal(t, tt.expectedReward, result, "Expected reward for %d epochs should be %d but was %d", tt.epochsSinceGenesis, tt.expectedReward, result)
+		})
+	}
+}
+func TestCalculateFixedEpochReward(t *testing.T) {
+	// Test parameters matching Bitcoin proposal defaults
+	initialReward := uint64(285000000000000)
+	decayRate := types.DecimalFromFloat(-0.000475) // Halving every ~1460 epochs (4 years)
+
+	t.Run("Zero epochs returns initial reward", func(t *testing.T) {
+		result, err := CalculateFixedEpochReward(0, initialReward, decayRate)
+		require.NoError(t, err)
+		require.Equal(t, initialReward, result)
+	})
+
+	t.Run("Reward decreases with positive epochs", func(t *testing.T) {
+		result100, err := CalculateFixedEpochReward(100, initialReward, decayRate)
+		require.NoError(t, err)
+		result200, err := CalculateFixedEpochReward(200, initialReward, decayRate)
+		require.NoError(t, err)
+		result500, err := CalculateFixedEpochReward(500, initialReward, decayRate)
+		require.NoError(t, err)
+
+		// Each subsequent epoch should have lower rewards due to negative decay rate
+		require.Less(t, result100, initialReward, "100 epochs should have lower reward than initial")
+		require.Less(t, result200, result100, "200 epochs should have lower reward than 100 epochs")
+		require.Less(t, result500, result200, "500 epochs should have lower reward than 200 epochs")
+	})
+
+	t.Run("Approximate halving after 1460 epochs", func(t *testing.T) {
+		// After ~1460 epochs, reward should be approximately half of initial
+		result1460, err := CalculateFixedEpochReward(1460, initialReward, decayRate)
+		require.NoError(t, err)
+		expectedHalf := initialReward / 2
+
+		// Allow 5% tolerance for exponential calculation precision
+		tolerance := expectedHalf / 20 // 5% tolerance
+		require.InDelta(t, expectedHalf, result1460, float64(tolerance), "Reward should approximately halve after 1460 epochs")
+	})
+
+	t.Run("Edge case: zero initial reward", func(t *testing.T) {
+		result, err := CalculateFixedEpochReward(100, 0, decayRate)
+		require.NoError(t, err)
+		require.Equal(t, uint64(0), result)
+	})
+
+	t.Run("Edge case: nil decay rate", func(t *testing.T) {
+		result, err := CalculateFixedEpochReward(100, initialReward, nil)
+		require.NoError(t, err)
+		require.Equal(t, initialReward, result, "Nil decay rate should return initial reward")
+	})
+
+	t.Run("Edge case: very large epochs", func(t *testing.T) {
+		// After many epochs, reward should approach 0
+		result, err := CalculateFixedEpochReward(10000, initialReward, decayRate)
+		require.NoError(t, err)
+		// After 10,000 epochs: exp(-0.000475 * 10000) ≈ 0.0086
+		// Expected: 285,000,000,000,000 * 0.0086 ≈ 2,451,000,000,000
+		require.Less(t, result, uint64(3000000000000), "After 10000 epochs, reward should be very small relative to initial")
+		require.Greater(t, result, uint64(2000000000000), "But should still have some value due to gradual decay")
+	})
+
+	t.Run("Positive decay rate increases reward", func(t *testing.T) {
+		positiveDecayRate := types.DecimalFromFloat(0.0001) // Small positive rate
+		result, err := CalculateFixedEpochReward(100, initialReward, positiveDecayRate)
+		require.NoError(t, err)
+		require.Greater(t, result, initialReward, "Positive decay rate should increase reward")
+	})
+}
+
+func TestGetParticipantPoCWeight(t *testing.T) {
+	// Create test epoch group data with validation weights
+	epochGroupData := &types.EpochGroupData{
+		ValidationWeights: []*types.ValidationWeight{
+			createTestValidationWeight("participant1", 1000, 100),
+			createTestValidationWeight("participant2", 2500, 150),
+			{
+				MemberAddress:      "participant3",
+				Weight:             0, // Zero weight participant
+				Reputation:         50,
+				ConfirmationWeight: 0,
+				MlNodes: []*types.MLNodeInfo{
+					{
+						NodeId:             "participant3-node",
+						PocWeight:          0,
+						TimeslotAllocation: []bool{true, false},
+					},
+				},
+			},
+			{
+				MemberAddress: "participant4",
+				Weight:        -100, // Negative weight participant
+				Reputation:    75,
+			},
+		},
+	}
+
+	t.Run("Valid participant returns correct weight", func(t *testing.T) {
+		weight := GetParticipantPoCWeight("participant1", epochGroupData)
+		require.Equal(t, uint64(1000), weight)
+
+		weight2 := GetParticipantPoCWeight("participant2", epochGroupData)
+		require.Equal(t, uint64(2500), weight2)
+	})
+
+	t.Run("Zero weight participant returns zero", func(t *testing.T) {
+		weight := GetParticipantPoCWeight("participant3", epochGroupData)
+		require.Equal(t, uint64(0), weight)
+	})
+
+	t.Run("Negative weight participant returns zero", func(t *testing.T) {
+		weight := GetParticipantPoCWeight("participant4", epochGroupData)
+		require.Equal(t, uint64(0), weight)
+	})
+
+	t.Run("Non-existent participant returns zero", func(t *testing.T) {
+		weight := GetParticipantPoCWeight("nonexistent", epochGroupData)
+		require.Equal(t, uint64(0), weight)
+	})
+
+	t.Run("Empty participant address returns zero", func(t *testing.T) {
+		weight := GetParticipantPoCWeight("", epochGroupData)
+		require.Equal(t, uint64(0), weight)
+	})
+
+	t.Run("Nil epoch group data returns zero", func(t *testing.T) {
+		weight := GetParticipantPoCWeight("participant1", nil)
+		require.Equal(t, uint64(0), weight)
+	})
+
+	t.Run("Empty validation weights returns zero", func(t *testing.T) {
+		emptyEpochData := &types.EpochGroupData{
+			ValidationWeights: []*types.ValidationWeight{},
+		}
+		weight := GetParticipantPoCWeight("participant1", emptyEpochData)
+		require.Equal(t, uint64(0), weight)
+	})
+}
+
+func TestCalculateParticipantBitcoinRewards(t *testing.T) {
+	// Setup test data
+	bitcoinParams := &types.BitcoinRewardParams{
+		InitialEpochReward: 285000000000000,
+		DecayRate:          types.DecimalFromFloat(-0.000475),
+		GenesisEpoch:       1,
+	}
+
+	// Create epoch group data with validation weights and MLNodes
+	epochGroupData := &types.EpochGroupData{
+		EpochIndex: 100, // 99 epochs since genesis (epochsSinceGenesis = 100 - 1)
+		ValidationWeights: []*types.ValidationWeight{
+			{
+				MemberAddress:      "participant1",
+				Weight:             1000,
+				Reputation:         100,
+				ConfirmationWeight: 1000, // All weight confirmed (no split for these tests)
+				MlNodes: []*types.MLNodeInfo{
+					{
+						NodeId:             "node1",
+						PocWeight:          1000,
+						TimeslotAllocation: []bool{true, false}, // POC_SLOT=false
+					},
+				},
+			},
+			{
+				MemberAddress:      "participant2",
+				Weight:             2000, // 50% weight - tests power capping to 30%
+				Reputation:         150,
+				ConfirmationWeight: 2000,
+				MlNodes: []*types.MLNodeInfo{
+					{
+						NodeId:             "node2",
+						PocWeight:          2000,
+						TimeslotAllocation: []bool{true, false},
+					},
+				},
+			},
+			{
+				MemberAddress:      "participant3",
+				Weight:             1000,
+				Reputation:         120,
+				ConfirmationWeight: 1000,
+				MlNodes: []*types.MLNodeInfo{
+					{
+						NodeId:             "node3",
+						PocWeight:          1000,
+						TimeslotAllocation: []bool{true, false},
+					},
+				},
+			},
+		},
+	}
+
+	// Create test participants
+	participants := []types.Participant{
+		{
+			Address:     "participant1",
+			CoinBalance: 500, // WorkCoins from user fees
+			Status:      types.ParticipantStatus_ACTIVE,
+			CurrentEpochStats: &types.CurrentEpochStats{
+				InferenceCount: 100,
+				MissedRequests: 0,
+			},
+		},
+		{
+			Address:     "participant2",
+			CoinBalance: 1000, // WorkCoins from user fees
+			Status:      types.ParticipantStatus_ACTIVE,
+			CurrentEpochStats: &types.CurrentEpochStats{
+				InferenceCount: 100,
+				MissedRequests: 0,
+			},
+		},
+		{
+			Address:     "participant3",
+			CoinBalance: 750, // WorkCoins from user fees
+			Status:      types.ParticipantStatus_ACTIVE,
+			CurrentEpochStats: &types.CurrentEpochStats{
+				InferenceCount: 100,
+				MissedRequests: 0,
+			},
+		},
+	}
+
+	t.Run("Empty confirmation scales skip confirmation rescale", func(t *testing.T) {
+		noScaleData := &types.EpochGroupData{
+			EpochIndex: 1,
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             1000,
+					ConfirmationWeight: 0,
+				},
+				{
+					MemberAddress:      "participant2",
+					Weight:             1000,
+					ConfirmationWeight: 0,
+				},
+			},
+		}
+		noScaleParticipants := []types.Participant{
+			{
+				Address:           "participant1",
+				Status:            types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{},
+			},
+			{
+				Address:           "participant2",
+				Status:            types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{},
+			},
+		}
+		noDecayParams := &types.BitcoinRewardParams{
+			InitialEpochReward: 1000,
+			DecayRate:          types.DecimalFromFloat(0),
+			GenesisEpoch:       1,
+		}
+
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := CalculateParticipantBitcoinRewards(
+			noScaleParticipants,
+			noScaleData,
+			noDecayParams,
+			nil,
+			modelNodesFromVW(noScaleData.ValidationWeights),
+			logger,
+		)
+
+		require.NoError(t, err)
+		require.Equal(t, int64(1000), bitcoinResult.Amount)
+		require.Len(t, results, 2)
+		require.Equal(t, uint64(500), results[0].Settle.RewardCoins)
+		require.Equal(t, uint64(500), results[1].Settle.RewardCoins)
+	})
+
+	t.Run("Successful Bitcoin reward distribution", func(t *testing.T) {
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := CalculateParticipantBitcoinRewards(participants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 3, len(results))
+
+		// Verify BitcoinResult
+		require.Greater(t, bitcoinResult.Amount, int64(0))
+		require.Equal(t, uint64(100), bitcoinResult.EpochNumber)
+		require.True(t, bitcoinResult.DecayApplied) // Since epoch > genesis
+
+		// Calculate expected rewards with power capping
+		// Apply power capping to verify the algorithm works correctly
+		uncappedWeights := []*types.ActiveParticipant{
+			{Index: "participant1", Weight: 1000},
+			{Index: "participant2", Weight: 2000}, // 50% - should be capped
+			{Index: "participant3", Weight: 1000},
+		}
+		cappedWeights, wasCapped := ApplyPowerCappingForWeights(uncappedWeights)
+		require.True(t, wasCapped, "Power capping should be applied when participant2 has 50%")
+
+		// Denominator uses totalFullWeight (sum of vw.Weight), not post-capping total.
+		// This ensures power-capped shares go to governance instead of being redistributed.
+		totalFullWeight := uint64(1000 + 2000 + 1000) // 4000
+
+		expectedEpochReward, err := CalculateFixedEpochReward(99, 285000000000000, bitcoinParams.DecayRate)
+		require.NoError(t, err)
+		require.Equal(t, int64(expectedEpochReward), bitcoinResult.Amount)
+
+		// Calculate base rewards: cappedWeight / totalFullWeight * epochReward
+		expectedP1Base := (uint64(cappedWeights[0].Weight) * expectedEpochReward) / totalFullWeight
+		expectedP2Base := (uint64(cappedWeights[1].Weight) * expectedEpochReward) / totalFullWeight
+		expectedP3Base := (uint64(cappedWeights[2].Weight) * expectedEpochReward) / totalFullWeight
+
+		// Verify participant1: uses capped weight with fullWeight denominator
+		p1Result := results[0]
+		require.NoError(t, p1Result.Error)
+		require.Equal(t, "participant1", p1Result.Settle.Participant)
+		require.Equal(t, uint64(500), p1Result.Settle.WorkCoins) // Preserved user fees
+		require.Equal(t, expectedP1Base, p1Result.Settle.RewardCoins)
+
+		// Verify participant2: reward based on capped weight (should be less than 50% despite having 50% uncapped weight)
+		p2Result := results[1]
+		require.NoError(t, p2Result.Error)
+		require.Equal(t, "participant2", p2Result.Settle.Participant)
+		require.Equal(t, uint64(1000), p2Result.Settle.WorkCoins)
+		require.Equal(t, expectedP2Base, p2Result.Settle.RewardCoins)
+		require.Less(t, p2Result.Settle.RewardCoins, expectedEpochReward/2, "Capped participant should get less than 50%")
+
+		// Verify participant3: uses capped weight
+		p3Result := results[2]
+		require.NoError(t, p3Result.Error)
+		require.Equal(t, "participant3", p3Result.Settle.Participant)
+		require.Equal(t, uint64(750), p3Result.Settle.WorkCoins)
+		require.Equal(t, expectedP3Base, p3Result.Settle.RewardCoins)
+
+		// Verify epoch reward is conserved (participants + governance)
+		totalDistributed := p1Result.Settle.RewardCoins + p2Result.Settle.RewardCoins + p3Result.Settle.RewardCoins
+		require.Equal(t, expectedEpochReward, totalDistributed+uint64(bitcoinResult.GovernanceAmount), "Epoch reward must be conserved (participants + governance)")
+	})
+
+	t.Run("Invalid participants get no rewards", func(t *testing.T) {
+		invalidParticipants := []types.Participant{
+			{
+				Address:     "participant1",
+				CoinBalance: 500,
+				Status:      types.ParticipantStatus_INVALID, // Invalid status
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			},
+			{
+				Address:     "participant2",
+				CoinBalance: 1000,
+				Status:      types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			},
+			{
+				Address:     "participant3",
+				CoinBalance: 750,
+				Status:      types.ParticipantStatus_INACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+				},
+			},
+		}
+
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := CalculateParticipantBitcoinRewards(invalidParticipants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 3, len(results))
+
+		// Verify BitcoinResult still shows fixed epoch reward
+		require.Greater(t, bitcoinResult.Amount, int64(0))
+		require.Equal(t, uint64(100), bitcoinResult.EpochNumber)
+
+		// Invalid participant gets no rewards
+		p1Result := results[0]
+		require.NoError(t, p1Result.Error)
+		require.Equal(t, uint64(0), p1Result.Settle.WorkCoins)   // Invalid participants don't get WorkCoins
+		require.Equal(t, uint64(0), p1Result.Settle.RewardCoins) // Invalid participants don't get RewardCoins
+
+		// Valid participant gets all rewards (since they have all the PoC weight)
+		p2Result := results[1]
+		require.NoError(t, p2Result.Error)
+		require.Equal(t, uint64(1000), p2Result.Settle.WorkCoins)                    // Valid participant gets WorkCoins
+		require.Equal(t, bitcoinResult.Amount/2, int64(p2Result.Settle.RewardCoins)) // Valid participant gets all RewardCoins
+
+		// Inactive participant gets no rewards
+		p3Result := results[2]
+		require.NoError(t, p3Result.Error)
+		require.Equal(t, uint64(0), p3Result.Settle.WorkCoins)   // Valid participant gets WorkCoins
+		require.Equal(t, uint64(0), p3Result.Settle.RewardCoins) // Valid participant gets all RewardCoins
+
+		// Governance gets remainder
+		require.Equal(t, bitcoinResult.Amount/2, bitcoinResult.GovernanceAmount)
+
+	})
+
+	t.Run("Negative coin balance subtracted", func(t *testing.T) {
+		expectedReward := uint64(271908110525522)
+		negativeBalance := int64(-100)
+		negativeParticipants := []types.Participant{
+			{
+				Address:     "participant1",
+				CoinBalance: negativeBalance, // Negative balance
+				Status:      types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			},
+		}
+
+		logger := createTestLogger(t)
+		results, _, err := CalculateParticipantBitcoinRewards(negativeParticipants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(results))
+
+		p1Result := results[0]
+		require.Equal(t, expectedReward-uint64(-negativeBalance), p1Result.Settle.RewardCoins)
+		require.NoError(t, p1Result.Error)
+	})
+
+	t.Run("Negative coin balance - token conservation", func(t *testing.T) {
+		// Debt deducted from reward should go to governance, not vanish
+		debt := int64(-100)
+		negativeParticipants := []types.Participant{
+			{
+				Address:     "participant1",
+				CoinBalance: debt, // Owes 100 tokens
+				Status:      types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			},
+		}
+
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := CalculateParticipantBitcoinRewards(negativeParticipants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(results))
+
+		p1Result := results[0]
+		require.NoError(t, p1Result.Error)
+
+		// participant + governance = total
+		totalParticipantRewards := p1Result.Settle.RewardCoins
+		governanceAmount := uint64(bitcoinResult.GovernanceAmount)
+		epochReward := uint64(bitcoinResult.Amount)
+
+		totalAccounted := totalParticipantRewards + governanceAmount
+		require.Equal(t, epochReward, totalAccounted,
+			"Token conservation violated: participant(%d) + governance(%d) = %d, expected %d",
+			totalParticipantRewards, governanceAmount, totalAccounted, epochReward)
+
+		// Governance gets the debt back (plus rounding)
+		require.GreaterOrEqual(t, governanceAmount, uint64(-debt),
+			"governance should get debt back: want >= %d, got %d", -debt, governanceAmount)
+	})
+
+	t.Run("Negative coin balance - multi-participant token conservation", func(t *testing.T) {
+		// Same check with multiple participants
+		multiParticipants := []types.Participant{
+			{
+				Address:     "participant1",
+				CoinBalance: -200, // Owes 200 tokens
+				Status:      types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			},
+			{
+				Address:     "participant2",
+				CoinBalance: 500, // Positive balance
+				Status:      types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			},
+		}
+
+		multiEpochData := &types.EpochGroupData{
+			EpochIndex: 100,
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             1000,
+					Reputation:         100,
+					ConfirmationWeight: 1000,
+					MlNodes: []*types.MLNodeInfo{
+						{NodeId: "node1", PocWeight: 1000, TimeslotAllocation: []bool{true}},
+					},
+				},
+				{
+					MemberAddress:      "participant2",
+					Weight:             1000,
+					Reputation:         100,
+					ConfirmationWeight: 1000,
+					MlNodes: []*types.MLNodeInfo{
+						{NodeId: "node2", PocWeight: 1000, TimeslotAllocation: []bool{true}},
+					},
+				},
+			},
+		}
+
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := CalculateParticipantBitcoinRewards(multiParticipants, multiEpochData, bitcoinParams, nil, modelNodesAndScales(multiEpochData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 2, len(results))
+
+		var totalParticipantRewards uint64
+		for _, r := range results {
+			totalParticipantRewards += r.Settle.RewardCoins
+		}
+
+		governanceAmount := uint64(bitcoinResult.GovernanceAmount)
+		epochReward := uint64(bitcoinResult.Amount)
+
+		totalAccounted := totalParticipantRewards + governanceAmount
+		require.Equal(t, epochReward, totalAccounted,
+			"Token conservation violated: participants(%d) + governance(%d) = %d, expected %d",
+			totalParticipantRewards, governanceAmount, totalAccounted, epochReward)
+	})
+
+	t.Run("Negative coin balance error", func(t *testing.T) {
+		expectedReward := int64(271908110525520)
+		// Negative balance bigger than reward, return error
+		negativeBalance := -(expectedReward + 100)
+		negativeParticipants := []types.Participant{
+			{
+				Address:     "participant1",
+				CoinBalance: negativeBalance, // Negative balance
+				Status:      types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			},
+		}
+
+		logger := createTestLogger(t)
+		results, _, err := CalculateParticipantBitcoinRewards(negativeParticipants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(results))
+
+		p1Result := results[0]
+		require.Error(t, p1Result.Error)
+		require.Equal(t, types.ErrNegativeCoinBalance, p1Result.Error)
+	})
+
+	t.Run("Zero PoC weight participants get no rewards", func(t *testing.T) {
+		// Epoch group with zero weight participant
+		zeroWeightEpochData := &types.EpochGroupData{
+			EpochIndex: 50,
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             0, // Zero weight
+					Reputation:         100,
+					ConfirmationWeight: 0,
+					MlNodes:            []*types.MLNodeInfo{},
+				},
+				{
+					MemberAddress:      "participant2",
+					Weight:             1000,
+					Reputation:         150,
+					ConfirmationWeight: 1000,
+					MlNodes: []*types.MLNodeInfo{
+						{
+							NodeId:             "node2",
+							PocWeight:          1000,
+							TimeslotAllocation: []bool{true, false},
+						},
+					},
+				},
+			},
+		}
+
+		zeroWeightParticipants := []types.Participant{
+			{
+				Address:     "participant1",
+				CoinBalance: 500,
+				Status:      types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			},
+			{
+				Address:     "participant2",
+				CoinBalance: 1000,
+				Status:      types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			},
+		}
+
+		logger := createTestLogger(t)
+		results, _, err := CalculateParticipantBitcoinRewards(zeroWeightParticipants, zeroWeightEpochData, bitcoinParams, nil, modelNodesAndScales(zeroWeightEpochData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 2, len(results))
+
+		// Zero weight participant gets WorkCoins but no RewardCoins
+		p1Result := results[0]
+		require.NoError(t, p1Result.Error)
+		require.Equal(t, uint64(500), p1Result.Settle.WorkCoins) // WorkCoins preserved
+		require.Equal(t, uint64(0), p1Result.Settle.RewardCoins) // No RewardCoins due to zero weight
+
+		// Non-zero weight participant gets all RewardCoins
+		p2Result := results[1]
+		require.NoError(t, p2Result.Error)
+		require.Equal(t, uint64(1000), p2Result.Settle.WorkCoins)  // WorkCoins preserved
+		require.Greater(t, p2Result.Settle.RewardCoins, uint64(0)) // Gets all RewardCoins
+	})
+
+	t.Run("Parameter validation", func(t *testing.T) {
+		logger := createTestLogger(t)
+
+		// Nil participants
+		_, _, err := CalculateParticipantBitcoinRewards(nil, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "participants cannot be nil")
+
+		// Nil epoch group data
+		_, _, err = CalculateParticipantBitcoinRewards(participants, nil, bitcoinParams, nil, modelNodesAndScales(nil), logger)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "epoch group data cannot be nil")
+
+		// Nil bitcoin params
+		_, _, err = CalculateParticipantBitcoinRewards(participants, epochGroupData, nil, nil, modelNodesAndScales(epochGroupData), logger)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "bitcoin parameters cannot be nil")
+	})
+
+	t.Run("Genesis epoch reward distribution", func(t *testing.T) {
+		// Test at first reward epoch (no decay since epochsSinceGenesis = 1 - 1 = 0)
+		genesisEpochData := &types.EpochGroupData{
+			EpochIndex: 1, // First reward epoch (epoch 0 is skipped)
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             1000,
+					Reputation:         100,
+					ConfirmationWeight: 1000,
+					MlNodes: []*types.MLNodeInfo{
+						{
+							NodeId:             "node1",
+							PocWeight:          1000,
+							TimeslotAllocation: []bool{true, false},
+						},
+					},
+				},
+			},
+		}
+
+		genesisParticipants := []types.Participant{
+			{
+				Address:     "participant1",
+				CoinBalance: 500,
+				Status:      types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			},
+		}
+
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := CalculateParticipantBitcoinRewards(genesisParticipants, genesisEpochData, bitcoinParams, nil, modelNodesAndScales(genesisEpochData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(results))
+
+		// At first reward epoch, reward should be initial amount (no decay since epochsSinceGenesis = 0)
+		require.Equal(t, int64(285000000000000), bitcoinResult.Amount)
+		require.Equal(t, uint64(1), bitcoinResult.EpochNumber)
+		require.False(t, bitcoinResult.DecayApplied) // No decay at first reward epoch
+
+		// Participant gets full reward
+		p1Result := results[0]
+		require.NoError(t, p1Result.Error)
+		require.Equal(t, uint64(500), p1Result.Settle.WorkCoins)               // WorkCoins preserved
+		require.Equal(t, uint64(285000000000000), p1Result.Settle.RewardCoins) // Full epoch reward
+	})
+
+	t.Run("Remainder goes to governance (no redistribution)", func(t *testing.T) {
+		// Test scenario where integer division creates remainder
+		// Use an epoch reward that doesn't divide evenly by participant weights
+		oddRewardParams := &types.BitcoinRewardParams{
+			InitialEpochReward: 100,                       // Small reward for easier testing
+			DecayRate:          types.DecimalFromFloat(0), // No decay for predictability
+			GenesisEpoch:       1,
+		}
+
+		// 3 participants with equal weight - 100 doesn't divide evenly by 3
+		remainderEpochData := &types.EpochGroupData{
+			EpochIndex: 1, // First reward epoch for no decay (epochsSinceGenesis = 1 - 1 = 0)
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             1000,
+					Reputation:         100,
+					ConfirmationWeight: 1000,
+					MlNodes: []*types.MLNodeInfo{
+						{
+							NodeId:             "node1",
+							PocWeight:          1000,
+							TimeslotAllocation: []bool{true, false},
+						},
+					},
+				},
+				{
+					MemberAddress:      "participant2",
+					Weight:             1000,
+					Reputation:         100,
+					ConfirmationWeight: 1000,
+					MlNodes: []*types.MLNodeInfo{
+						{
+							NodeId:             "node2",
+							PocWeight:          1000,
+							TimeslotAllocation: []bool{true, false},
+						},
+					},
+				},
+				{
+					MemberAddress:      "participant3",
+					Weight:             1000,
+					Reputation:         100,
+					ConfirmationWeight: 1000,
+					MlNodes: []*types.MLNodeInfo{
+						{
+							NodeId:             "node3",
+							PocWeight:          1000,
+							TimeslotAllocation: []bool{true, false},
+						},
+					},
+				},
+			},
+		}
+
+		remainderParticipants := []types.Participant{
+			{
+				Address:     "participant1",
+				CoinBalance: 100,
+				Status:      types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			},
+			{
+				Address:     "participant2",
+				CoinBalance: 200,
+				Status:      types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			},
+			{
+				Address:     "participant3",
+				CoinBalance: 300,
+				Status:      types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			},
+		}
+
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := CalculateParticipantBitcoinRewards(remainderParticipants, remainderEpochData, oddRewardParams, nil, modelNodesAndScales(remainderEpochData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 3, len(results))
+
+		// Verify BitcoinResult shows correct epoch reward
+		require.Equal(t, int64(100), bitcoinResult.Amount)
+
+		// Calculate what each participant should get: 100/3 = 33 remainder 1 (remainder goes to governance)
+		totalDistributed := results[0].Settle.RewardCoins + results[1].Settle.RewardCoins + results[2].Settle.RewardCoins
+
+		require.Equal(t, uint64(99), totalDistributed, "Remainder should not be redistributed")
+		require.Equal(t, int64(1), bitcoinResult.GovernanceAmount, "Remainder should go to governance")
+
+		// Verify individual distributions
+		for i, result := range results {
+			require.NoError(t, result.Error, "Participant %d should have no error", i+1)
+
+			// Verify WorkCoins are preserved correctly
+			expectedWorkCoins := uint64((i + 1) * 100) // 100, 200, 300
+			require.Equal(t, expectedWorkCoins, result.Settle.WorkCoins, "WorkCoins must be preserved for participant %d", i+1)
+		}
+
+		// Verify individual distributions (no remainder redistribution)
+		require.Equal(t, uint64(33), results[0].Settle.RewardCoins, "First participant should get base share only")
+		require.Equal(t, uint64(33), results[1].Settle.RewardCoins, "Second participant should get 33")
+		require.Equal(t, uint64(33), results[2].Settle.RewardCoins, "Third participant should get 33")
+	})
+}
+
+func TestGetBitcoinSettleAmounts(t *testing.T) {
+	// Setup test data - same as previous tests to ensure consistency
+	bitcoinParams := &types.BitcoinRewardParams{
+		InitialEpochReward: 285000000000000,
+		DecayRate:          types.DecimalFromFloat(-0.000475),
+		GenesisEpoch:       1,
+	}
+
+	// Setup settle parameters for supply cap checking
+	settleParams := &SettleParameters{
+		TotalSubsidyPaid:   1000000,            // Already paid 1M coins
+		TotalSubsidySupply: 600000000000000000, // 600M total supply cap (600 * 10^15)
+	}
+
+	// Use equal weights to avoid power capping interference (testing supply cap, not power cap)
+	epochGroupData := &types.EpochGroupData{
+		EpochIndex: 100,
+		ValidationWeights: []*types.ValidationWeight{
+			createTestValidationWeight("participant1", 500, 100),
+			createTestValidationWeight("participant2", 500, 150),
+		},
+	}
+
+	participants := []types.Participant{
+		{
+			Address:     "participant1",
+			CoinBalance: 500,
+			Status:      types.ParticipantStatus_ACTIVE,
+			CurrentEpochStats: &types.CurrentEpochStats{
+				InferenceCount: 100,
+				MissedRequests: 0,
+			},
+		},
+		{
+			Address:     "participant2",
+			CoinBalance: 1000,
+			Status:      types.ParticipantStatus_ACTIVE,
+			CurrentEpochStats: &types.CurrentEpochStats{
+				InferenceCount: 100,
+				MissedRequests: 0,
+			},
+		},
+	}
+
+	t.Run("Main entry point function works correctly", func(t *testing.T) {
+		// Call the main entry point function
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := GetBitcoinSettleAmounts(participants, epochGroupData, bitcoinParams, nil, settleParams, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 2, len(results))
+
+		// Verify it returns same results as the underlying function
+		expectedResults, expectedBitcoinResult, expectedErr := CalculateParticipantBitcoinRewards(participants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.Equal(t, expectedErr, err)
+		require.Equal(t, expectedBitcoinResult, bitcoinResult)
+		require.Equal(t, len(expectedResults), len(results))
+
+		// Verify each result matches
+		for i, result := range results {
+			expected := expectedResults[i]
+			require.Equal(t, expected.Error, result.Error)
+			require.Equal(t, expected.Settle.Participant, result.Settle.Participant)
+			require.Equal(t, expected.Settle.WorkCoins, result.Settle.WorkCoins)
+			require.Equal(t, expected.Settle.RewardCoins, result.Settle.RewardCoins)
+		}
+
+		// Verify interface compatibility (returns correct types)
+		require.IsType(t, []*SettleResult{}, results)
+		require.IsType(t, BitcoinResult{}, bitcoinResult)
+
+		// Verify WorkCoins and RewardCoins are properly calculated
+		require.Equal(t, uint64(500), results[0].Settle.WorkCoins)   // Preserved user fees
+		require.Equal(t, uint64(1000), results[1].Settle.WorkCoins)  // Preserved user fees
+		require.Greater(t, results[0].Settle.RewardCoins, uint64(0)) // Bitcoin rewards
+		require.Greater(t, results[1].Settle.RewardCoins, uint64(0)) // Bitcoin rewards
+	})
+
+	t.Run("Parameter validation in main entry point", func(t *testing.T) {
+		logger := createTestLogger(t)
+
+		// Nil participants
+		_, _, err := GetBitcoinSettleAmounts(nil, epochGroupData, bitcoinParams, nil, settleParams, modelNodesAndScales(epochGroupData), logger)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "participants cannot be nil")
+
+		// Nil epoch group data
+		_, _, err = GetBitcoinSettleAmounts(participants, nil, bitcoinParams, nil, settleParams, modelNodesAndScales(nil), logger)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "epochGroupData cannot be nil")
+
+		// Nil bitcoin params
+		_, _, err = GetBitcoinSettleAmounts(participants, epochGroupData, nil, nil, settleParams, modelNodesAndScales(epochGroupData), logger)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "bitcoinParams cannot be nil")
+
+		// Nil settle params
+		_, _, err = GetBitcoinSettleAmounts(participants, epochGroupData, bitcoinParams, nil, nil, modelNodesAndScales(epochGroupData), logger)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "settleParams cannot be nil")
+	})
+
+	t.Run("Supply cap enforcement with remainder to governance", func(t *testing.T) {
+		// Test scenario where we're approaching supply cap and need proportional reduction
+		supplyCappedParams := &SettleParameters{
+			TotalSubsidyPaid:   600000000000000000 - 100000, // Very close to cap (100K remaining)
+			TotalSubsidySupply: 600000000000000000,          // 600M total supply cap
+		}
+
+		// Call with supply cap constraints
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := GetBitcoinSettleAmounts(participants, epochGroupData, bitcoinParams, nil, supplyCappedParams, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+
+		// Verify the amount was reduced to fit within cap
+		require.Equal(t, int64(100000), bitcoinResult.Amount, "Should mint only remaining supply")
+
+		// Verify available amount is conserved (participants + governance)
+		var totalDistributed uint64 = 0
+		for _, result := range results {
+			if result.Error == nil && result.Settle != nil {
+				totalDistributed += result.Settle.RewardCoins
+			}
+		}
+		require.Equal(t, uint64(100000), totalDistributed+uint64(bitcoinResult.GovernanceAmount), "Available supply must be conserved (participants + governance)")
+
+		// Verify participants still received proportional rewards (reduced but fair)
+		require.Greater(t, results[0].Settle.RewardCoins, uint64(0), "Participant 1 should get some rewards")
+		require.Greater(t, results[1].Settle.RewardCoins, uint64(0), "Participant 2 should get some rewards")
+		require.Equal(t, results[0].Settle.RewardCoins, results[1].Settle.RewardCoins, "Equal weights should get equal rewards (500 each)")
+	})
+
+	t.Run("Supply cap already reached - zero rewards", func(t *testing.T) {
+		// Test scenario where supply cap is already reached
+		capReachedParams := &SettleParameters{
+			TotalSubsidyPaid:   600000000000000000, // Already at cap
+			TotalSubsidySupply: 600000000000000000, // 600M total supply cap
+		}
+
+		// Call with supply cap already reached
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := GetBitcoinSettleAmounts(participants, epochGroupData, bitcoinParams, nil, capReachedParams, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+
+		// Verify no rewards are minted
+		require.Equal(t, int64(0), bitcoinResult.Amount, "Should mint zero when cap reached")
+
+		// Verify all participant rewards are zero
+		for _, result := range results {
+			if result.Error == nil && result.Settle != nil {
+				require.Equal(t, uint64(0), result.Settle.RewardCoins, "All RewardCoins should be zero when cap reached")
+				// WorkCoins should still be preserved
+				require.Greater(t, result.Settle.WorkCoins, uint64(0), "WorkCoins should still be preserved")
+			}
+		}
+	})
+}
+
+// TestPhase2BonusFunctions tests the Phase 2 enhancement stub functions
+func TestPhase2BonusFunctions(t *testing.T) {
+	// Setup test data
+	epochGroupData := &types.EpochGroupData{
+		EpochIndex: 100,
+		ValidationWeights: []*types.ValidationWeight{
+			createTestValidationWeight("participant1", 1000, 100),
+			createTestValidationWeight("participant2", 2000, 150),
+		},
+	}
+
+	participants := []types.Participant{
+		{
+			Address:     "participant1",
+			CoinBalance: 500,
+			Status:      types.ParticipantStatus_ACTIVE,
+			CurrentEpochStats: &types.CurrentEpochStats{
+				InferenceCount: 100,
+				MissedRequests: 0,
+			},
+		},
+		{
+			Address:     "participant2",
+			CoinBalance: 1000,
+			Status:      types.ParticipantStatus_ACTIVE,
+			CurrentEpochStats: &types.CurrentEpochStats{
+				InferenceCount: 100,
+				MissedRequests: 0,
+			},
+		},
+	}
+
+	t.Run("CalculateUtilizationBonuses returns 1.0 multipliers", func(t *testing.T) {
+		bonuses := CalculateUtilizationBonuses(participants, epochGroupData)
+		require.Equal(t, 2, len(bonuses))
+		require.Equal(t, one, bonuses["participant1"], "Phase 1 should return 1.0 multiplier")
+		require.Equal(t, one, bonuses["participant2"], "Phase 1 should return 1.0 multiplier")
+	})
+
+	t.Run("CalculateModelCoverageBonuses returns 1.0 multipliers", func(t *testing.T) {
+		bonuses := CalculateModelCoverageBonuses(participants, epochGroupData)
+		require.Equal(t, 2, len(bonuses))
+		require.Equal(t, one, bonuses["participant1"], "Phase 1 should return 1.0 multiplier")
+		require.Equal(t, one, bonuses["participant2"], "Phase 1 should return 1.0 multiplier")
+	})
+
+	t.Run("GetMLNodeAssignments returns empty list", func(t *testing.T) {
+		assignments := GetMLNodeAssignments("participant1", epochGroupData)
+		require.Empty(t, assignments, "Phase 1 should return empty assignment list")
+
+		assignments2 := GetMLNodeAssignments("participant2", epochGroupData)
+		require.Empty(t, assignments2, "Phase 1 should return empty assignment list")
+	})
+
+	t.Run("Bonus functions handle nil parameters", func(t *testing.T) {
+		// Nil epoch group data
+		bonuses := CalculateUtilizationBonuses(participants, nil)
+		require.Equal(t, 2, len(bonuses))
+		require.Equal(t, one, bonuses["participant1"])
+		require.Equal(t, one, bonuses["participant2"])
+
+		bonuses2 := CalculateModelCoverageBonuses(participants, nil)
+		require.Equal(t, 2, len(bonuses2))
+		require.Equal(t, one, bonuses2["participant1"])
+		require.Equal(t, one, bonuses2["participant2"])
+
+		// Nil participant for MLNode assignments
+		assignments := GetMLNodeAssignments("", nil)
+		require.Empty(t, assignments)
+	})
+
+	t.Run("Bonus functions handle empty participants", func(t *testing.T) {
+		emptyParticipants := []types.Participant{}
+
+		bonuses := CalculateUtilizationBonuses(emptyParticipants, epochGroupData)
+		require.Empty(t, bonuses, "Empty participants should return empty bonus map")
+
+		bonuses2 := CalculateModelCoverageBonuses(emptyParticipants, epochGroupData)
+		require.Empty(t, bonuses2, "Empty participants should return empty bonus map")
+	})
+}
+
+// TestBonusIntegrationInGetParticipantPoCWeight tests the integration of bonus functions
+func TestBonusIntegrationInGetParticipantPoCWeight(t *testing.T) {
+	epochGroupData := &types.EpochGroupData{
+		ValidationWeights: []*types.ValidationWeight{
+			createTestValidationWeight("participant1", 1000, 100),
+			createTestValidationWeight("participant2", 2500, 150),
+		},
+	}
+
+	t.Run("Phase 1 integration maintains original weights", func(t *testing.T) {
+		// In Phase 1, bonus functions return 1.0, so final weight should equal base weight
+		weight1 := GetParticipantPoCWeight("participant1", epochGroupData)
+		require.Equal(t, uint64(1000), weight1, "Phase 1: finalWeight = baseWeight × 1.0 × 1.0 = baseWeight")
+
+		weight2 := GetParticipantPoCWeight("participant2", epochGroupData)
+		require.Equal(t, uint64(2500), weight2, "Phase 1: finalWeight = baseWeight × 1.0 × 1.0 = baseWeight")
+	})
+
+	t.Run("Bonus integration handles edge cases", func(t *testing.T) {
+		// Zero weight participant
+		zeroWeightData := &types.EpochGroupData{
+			ValidationWeights: []*types.ValidationWeight{
+				createTestValidationWeight("zeroParticipant", 0, 100),
+			},
+		}
+
+		weight := GetParticipantPoCWeight("zeroParticipant", zeroWeightData)
+		require.Equal(t, uint64(0), weight, "Zero base weight should result in zero final weight regardless of bonuses")
+
+		// Negative weight participant
+		negativeWeightData := &types.EpochGroupData{
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress: "negativeParticipant",
+					Weight:        -500,
+					Reputation:    100,
+				},
+			},
+		}
+
+		weightNeg := GetParticipantPoCWeight("negativeParticipant", negativeWeightData)
+		require.Equal(t, uint64(0), weightNeg, "Negative base weight should result in zero final weight")
+	})
+
+	t.Run("Bonus integration architecture ready for Phase 2", func(t *testing.T) {
+		// This test verifies the integration architecture is in place
+		// When Phase 2 is implemented, bonus functions will return actual multipliers
+		// and this integration will automatically apply them
+
+		weight := GetParticipantPoCWeight("participant1", epochGroupData)
+		require.Equal(t, uint64(1000), weight)
+
+		// Verify the integration doesn't break with different epoch data structures
+		largeWeightData := &types.EpochGroupData{
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             1000000, // Large weight
+					Reputation:         100,
+					ConfirmationWeight: 1000000,
+					MlNodes: []*types.MLNodeInfo{
+						{
+							NodeId:             "participant1-node",
+							PocWeight:          1000000,
+							TimeslotAllocation: []bool{true, false},
+						},
+					},
+				},
+			},
+		}
+
+		largeWeight := GetParticipantPoCWeight("participant1", largeWeightData)
+		require.Equal(t, uint64(1000000), largeWeight, "Large weights should be handled correctly")
+	})
+}
+
+// TestLargeValueEdgeCases tests behavior with maximum and large values
+func TestLargeValueEdgeCases(t *testing.T) {
+	t.Run("CalculateFixedEpochReward with large values", func(t *testing.T) {
+		// Test with large but reasonable initial reward
+		largeReward := uint64(1000000000)              // 1 billion
+		decayRate := types.DecimalFromFloat(-0.000001) // Very small decay
+
+		// Should handle large values without overflow
+		result, err := CalculateFixedEpochReward(1, largeReward, decayRate)
+		require.NoError(t, err)
+		require.Less(t, result, largeReward, "Decay should reduce the reward")
+		require.Greater(t, result, largeReward/2, "Result should still be close to original with small decay")
+
+		// Test with very large epochs but reasonable initial reward
+		result2, err := CalculateFixedEpochReward(1000000, 285000000000000, decayRate)
+		require.NoError(t, err)
+		require.Greater(t, result2, uint64(0), "Should not underflow to zero")
+		require.Less(t, result2, uint64(285000000000000), "Should be reduced due to decay")
+
+		// Test mathematical limits - should not panic or overflow
+		result3, err := CalculateFixedEpochReward(100000, 100000000, types.DecimalFromFloat(-0.000001))
+		require.NoError(t, err)
+		require.GreaterOrEqual(t, result3, uint64(0), "Should handle extreme cases gracefully")
+	})
+
+	t.Run("Large number of participants", func(t *testing.T) {
+		// Test with many participants to verify scalability
+		numParticipants := 1000
+		largeParticipants := make([]types.Participant, numParticipants)
+		largeValidationWeights := make([]*types.ValidationWeight, numParticipants)
+
+		for i := 0; i < numParticipants; i++ {
+			address := fmt.Sprintf("participant%d", i)
+			largeParticipants[i] = types.Participant{
+				Address:     address,
+				CoinBalance: int64(100 + i), // Different balances
+				Status:      types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			}
+			largeValidationWeights[i] = createTestValidationWeight(address, int64(1000+i), 100)
+		}
+
+		largeEpochData := &types.EpochGroupData{
+			EpochIndex:        50,
+			ValidationWeights: largeValidationWeights,
+		}
+
+		bitcoinParams := &types.BitcoinRewardParams{
+			InitialEpochReward: 285000000000000,
+			DecayRate:          types.DecimalFromFloat(-0.000475),
+			GenesisEpoch:       1,
+		}
+
+		// Should handle large number of participants efficiently
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := CalculateParticipantBitcoinRewards(largeParticipants, largeEpochData, bitcoinParams, nil, modelNodesAndScales(largeEpochData), logger)
+		require.NoError(t, err)
+		require.Equal(t, numParticipants, len(results))
+
+		// Verify epoch reward is conserved (participants + governance)
+		totalDistributed := uint64(0)
+		for _, result := range results {
+			require.NoError(t, result.Error)
+			require.Greater(t, result.Settle.WorkCoins, uint64(0), "Each participant should have WorkCoins")
+			require.Greater(t, result.Settle.RewardCoins, uint64(0), "Each participant should have RewardCoins")
+			totalDistributed += result.Settle.RewardCoins
+		}
+
+		require.Equal(t, uint64(bitcoinResult.Amount), totalDistributed+uint64(bitcoinResult.GovernanceAmount), "Epoch reward must be conserved (participants + governance)")
+	})
+
+	t.Run("Large PoC weights", func(t *testing.T) {
+		// Test with very large PoC weights (equal to avoid power capping)
+		largeWeightData := &types.EpochGroupData{
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             1000000000000, // 1 trillion
+					Reputation:         100,
+					ConfirmationWeight: 1000000000000,
+					MlNodes: []*types.MLNodeInfo{
+						{
+							NodeId:             "participant1-node",
+							PocWeight:          1000000000000,
+							TimeslotAllocation: []bool{true, false},
+						},
+					},
+				},
+				{
+					MemberAddress:      "participant2",
+					Weight:             1000000000000, // 1 trillion (equal weights)
+					Reputation:         150,
+					ConfirmationWeight: 1000000000000,
+					MlNodes: []*types.MLNodeInfo{
+						{
+							NodeId:             "participant2-node",
+							PocWeight:          1000000000000,
+							TimeslotAllocation: []bool{true, false},
+						},
+					},
+				},
+			},
+		}
+
+		weight1 := GetParticipantPoCWeight("participant1", largeWeightData)
+		require.Equal(t, uint64(1000000000000), weight1)
+
+		weight2 := GetParticipantPoCWeight("participant2", largeWeightData)
+		require.Equal(t, uint64(1000000000000), weight2)
+
+		// Test distribution with large weights
+		largeParticipants := []types.Participant{
+			{
+				Address:     "participant1",
+				CoinBalance: 500,
+				Status:      types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			},
+			{
+				Address:     "participant2",
+				CoinBalance: 1000,
+				Status:      types.ParticipantStatus_ACTIVE,
+				CurrentEpochStats: &types.CurrentEpochStats{
+					InferenceCount: 100,
+					MissedRequests: 0,
+				},
+			},
+		}
+
+		bitcoinParams := &types.BitcoinRewardParams{
+			InitialEpochReward: 285000000000000,
+			DecayRate:          types.DecimalFromFloat(0), // No decay for predictability
+			GenesisEpoch:       1,
+		}
+
+		largeWeightData.EpochIndex = 1 // First reward epoch for no decay (epochsSinceGenesis = 1 - 1 = 0)
+
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := CalculateParticipantBitcoinRewards(largeParticipants, largeWeightData, bitcoinParams, nil, modelNodesAndScales(largeWeightData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 2, len(results))
+
+		// Verify proportional distribution even with large weights
+		// participant1: 1T / 2T = 1/2 of rewards
+		// participant2: 1T / 2T = 1/2 of rewards (equal weights)
+		totalReward := uint64(bitcoinResult.Amount)
+		expectedP1 := totalReward / 2
+		expectedP2 := totalReward / 2
+
+		// Allow for remainder adjustment on first participant
+		require.InDelta(t, expectedP1, results[0].Settle.RewardCoins, 1, "Large weight equal distribution")
+		require.InDelta(t, expectedP2, results[1].Settle.RewardCoins, 1, "Large weight equal distribution")
+
+		// Verify epoch reward is conserved (participants + governance)
+		totalDistributed := results[0].Settle.RewardCoins + results[1].Settle.RewardCoins
+		require.Equal(t, totalReward, totalDistributed+uint64(bitcoinResult.GovernanceAmount), "Epoch reward must be conserved (participants + governance)")
+	})
+}
+
+// TestMathematicalPrecision tests calculation accuracy and precision
+func TestMathematicalPrecision(t *testing.T) {
+	t.Run("Decay calculation precision", func(t *testing.T) {
+		// Test precision of exponential decay calculations
+		initialReward := uint64(285000000000000)
+		decayRate := types.DecimalFromFloat(-0.000475)
+
+		// Test known values for precision verification
+		result1460, err := CalculateFixedEpochReward(1460, initialReward, decayRate)
+		require.NoError(t, err)
+		result2920, err := CalculateFixedEpochReward(2920, initialReward, decayRate) // Double the epochs
+		require.NoError(t, err)
+
+		// After 2920 epochs, reward should be approximately 1/4 of initial (two halvings)
+		expectedQuarter := initialReward / 4
+		tolerance := expectedQuarter / 10 // 10% tolerance for exponential precision
+
+		require.InDelta(t, expectedQuarter, result2920, float64(tolerance), "Double halving should result in quarter reward")
+
+		// Verify consistent decay progression
+		require.Less(t, result2920, result1460, "More epochs should result in lower rewards")
+
+		// Verify exponential property: if f(x) = initial * e^(rate*x), then f(2x) ≈ [f(x)]^2 / initial
+		// This is approximate due to discrete calculations and rounding
+		// Use big.Int to prevent overflow with large numbers
+		result1460Big := new(big.Int).SetUint64(result1460)
+		initialRewardBig := new(big.Int).SetUint64(initialReward)
+
+		// Calculate: (result1460 * result1460) / initialReward using big integers
+		expectedApproxBig := new(big.Int).Mul(result1460Big, result1460Big)
+		expectedApproxBig = expectedApproxBig.Div(expectedApproxBig, initialRewardBig)
+
+		expectedApprox := expectedApproxBig.Uint64()
+		require.InDelta(t, expectedApprox, result2920, float64(expectedApprox)/5, "Exponential decay property should hold approximately with 20% tolerance")
+	})
+
+	t.Run("Proportional distribution precision", func(t *testing.T) {
+		// Test precision of proportional distribution with prime numbers
+		// Use prime numbers to test integer division precision
+		primeRewardParams := &types.BitcoinRewardParams{
+			InitialEpochReward: 97,                        // Prime number
+			DecayRate:          types.DecimalFromFloat(0), // No decay
+			GenesisEpoch:       1,
+		}
+
+		// Three participants with equal weights (avoids power capping, still tests precision with prime reward)
+		primeEpochData := &types.EpochGroupData{
+			EpochIndex: 1, // First reward epoch for no decay (epochsSinceGenesis = 1 - 1 = 0)
+			ValidationWeights: []*types.ValidationWeight{
+				createTestValidationWeight("participant1", 10, 100),
+				createTestValidationWeight("participant2", 10, 100),
+				createTestValidationWeight("participant3", 10, 100),
+			},
+		}
+
+		primeParticipants := []types.Participant{
+			{Address: "participant1", CoinBalance: 100, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+			{Address: "participant2", CoinBalance: 200, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+			{Address: "participant3", CoinBalance: 300, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+		}
+
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := CalculateParticipantBitcoinRewards(primeParticipants, primeEpochData, primeRewardParams, nil, modelNodesAndScales(primeEpochData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 3, len(results))
+
+		// Total weight: 10 + 10 + 10 = 30
+		// Expected base distribution: 97/30 ≈ 3.233...
+		// participant1: 10/30 * 97 = 32.333... → 32
+		// participant2: 10/30 * 97 = 32.333... → 32
+		// participant3: 10/30 * 97 = 32.333... → 32
+		// Base total: 32 + 32 + 32 = 96, remainder: 97 - 96 = 1
+
+		expectedBase := uint64(32)
+		expectedRemainder := uint64(1)
+
+		// Remainder should go to governance (no redistribution)
+		require.Equal(t, expectedBase, results[0].Settle.RewardCoins, "First participant gets base only")
+		require.Equal(t, expectedBase, results[1].Settle.RewardCoins, "Second participant gets base only")
+		require.Equal(t, expectedBase, results[2].Settle.RewardCoins, "Third participant gets base only")
+
+		// Verify epoch reward is conserved (participants + governance)
+		totalDistributed := results[0].Settle.RewardCoins + results[1].Settle.RewardCoins + results[2].Settle.RewardCoins
+		require.Equal(t, uint64(97), totalDistributed+uint64(bitcoinResult.GovernanceAmount), "Prime reward must be conserved (participants + governance)")
+		require.Equal(t, expectedRemainder, uint64(bitcoinResult.GovernanceAmount), "Remainder should go to governance")
+		require.Equal(t, int64(97), bitcoinResult.Amount, "BitcoinResult shows correct amount")
+	})
+
+	t.Run("Zero remainder distribution", func(t *testing.T) {
+		// Test case where reward divides evenly (no remainder)
+		evenRewardParams := &types.BitcoinRewardParams{
+			InitialEpochReward: 100,                       // Divides evenly by participant weights
+			DecayRate:          types.DecimalFromFloat(0), // No decay
+			GenesisEpoch:       1,
+		}
+
+		evenEpochData := &types.EpochGroupData{
+			EpochIndex: 1, // First reward epoch for no decay (epochsSinceGenesis = 1 - 1 = 0)
+			ValidationWeights: []*types.ValidationWeight{
+				createTestValidationWeight("participant1", 50, 100), // 50/100 = 50%
+				createTestValidationWeight("participant2", 50, 100), // 50/100 = 50%
+			},
+		}
+
+		evenParticipants := []types.Participant{
+			{Address: "participant1", CoinBalance: 100, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+			{Address: "participant2", CoinBalance: 200, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+		}
+
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := CalculateParticipantBitcoinRewards(evenParticipants, evenEpochData, evenRewardParams, nil, modelNodesAndScales(evenEpochData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 2, len(results))
+
+		// Should divide evenly: 50% = 50, 50% = 50, total = 100, remainder = 0
+		require.Equal(t, uint64(50), results[0].Settle.RewardCoins, "50% of 100 = 50")
+		require.Equal(t, uint64(50), results[1].Settle.RewardCoins, "50% of 100 = 50")
+
+		// Verify total distribution
+		totalDistributed := results[0].Settle.RewardCoins + results[1].Settle.RewardCoins
+		require.Equal(t, uint64(100), totalDistributed, "Even distribution should total exactly")
+		require.Equal(t, int64(100), bitcoinResult.Amount, "BitcoinResult shows correct amount")
+	})
+}
+
+// Test effective-weight = ConfirmationWeight under the full-reading model.
+// ConfirmationWeight is the participant's reading (preserved + measured) from
+// evaluateConfirmation; settlement reads it directly.
+func TestCalculateParticipantBitcoinRewards_ConfirmationCapping(t *testing.T) {
+	t.Run("ConfirmationWeight drives effective weight", func(t *testing.T) {
+		bitcoinParams := &types.BitcoinRewardParams{
+			GenesisEpoch:       1,
+			InitialEpochReward: 600,
+			DecayRate:          types.DecimalFromFloat(0.0),
+		}
+
+		// The reading after CPoC collapsed each participant to these values:
+		// participant1: preserved(100) + measured(150) = 250
+		// participant2: preserved(50) + measured(100) = 150
+		epochGroupData := &types.EpochGroupData{
+			EpochIndex: 1,
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             300,
+					ConfirmationWeight: 250,
+				},
+				{
+					MemberAddress:      "participant2",
+					Weight:             150,
+					ConfirmationWeight: 150,
+				},
+			},
+		}
+
+		participants := []types.Participant{
+			{Address: "participant1", CoinBalance: 0, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+			{Address: "participant2", CoinBalance: 0, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+		}
+
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := CalculateParticipantBitcoinRewards(participants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 2, len(results))
+
+		// Effective: P1=250, P2=150. Power capping: P1 at 250/400 = 62.5% > 50%,
+		// capped to 150. After capping: P1=150, P2=150.
+		// Denominator = totalFullWeight = 300 + 150 = 450.
+		// P1: 150/450 * 600 = 200. P2: 150/450 * 600 = 200.
+		// Remainder to governance: 600 - 400 = 200.
+		require.Equal(t, uint64(200), results[0].Settle.RewardCoins, "participant1 capped reward")
+		require.Equal(t, uint64(200), results[1].Settle.RewardCoins, "participant2 reward")
+		require.Equal(t, int64(600), bitcoinResult.Amount)
+	})
+
+	t.Run("Zero ConfirmationWeight yields zero reward", func(t *testing.T) {
+		bitcoinParams := &types.BitcoinRewardParams{
+			GenesisEpoch:       1,
+			InitialEpochReward: 300,
+			DecayRate:          types.DecimalFromFloat(0.0),
+		}
+
+		// participant1 had all-preserved-nothing-measured under the old model; the
+		// reading = preserved(100). participant2 confirmed fully: reading = 200.
+		epochGroupData := &types.EpochGroupData{
+			EpochIndex: 1,
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             300,
+					ConfirmationWeight: 100,
+				},
+				{
+					MemberAddress:      "participant2",
+					Weight:             200,
+					ConfirmationWeight: 200,
+				},
+			},
+		}
+
+		participants := []types.Participant{
+			{Address: "participant1", CoinBalance: 0, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+			{Address: "participant2", CoinBalance: 0, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+		}
+
+		logger := createTestLogger(t)
+		results, _, err := CalculateParticipantBitcoinRewards(participants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+
+		// Effective: P1=100, P2=200. Power capping: P2 at 200/300 = 66.7% > 50%,
+		// capped to 100. After capping: P1=100, P2=100.
+		// Denominator = totalFullWeight = 300 + 200 = 500.
+		// P1: 100/500 * 300 = 60. P2: 100/500 * 300 = 60.
+		require.Equal(t, uint64(60), results[0].Settle.RewardCoins, "participant1 reading-based reward")
+		require.Equal(t, uint64(60), results[1].Settle.RewardCoins, "participant2 capped reward")
+	})
+}
+
+// Test confirmation capping WITH power capping
+func TestCalculateParticipantBitcoinRewards_ConfirmationAndPowerCapping(t *testing.T) {
+	t.Run("Power capping applies after confirmation capping", func(t *testing.T) {
+		bitcoinParams := &types.BitcoinRewardParams{
+			GenesisEpoch:       1,
+			InitialEpochReward: 1000,
+			DecayRate:          types.DecimalFromFloat(0.0),
+		}
+
+		epochGroupData := &types.EpochGroupData{
+			EpochIndex: 1,
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             700,
+					ConfirmationWeight: 600, // Large confirmed weight
+					MlNodes: []*types.MLNodeInfo{
+						{
+							NodeId:             "node1",
+							PocWeight:          100,
+							TimeslotAllocation: []bool{true, true}, // POC_SLOT=true (preserved)
+						},
+						{
+							NodeId:             "node2",
+							PocWeight:          600,
+							TimeslotAllocation: []bool{true, false}, // POC_SLOT=false
+						},
+					},
+				},
+				{
+					MemberAddress:      "participant2",
+					Weight:             100,
+					ConfirmationWeight: 100,
+					MlNodes: []*types.MLNodeInfo{
+						{
+							NodeId:             "node3",
+							PocWeight:          100,
+							TimeslotAllocation: []bool{true, false}, // POC_SLOT=false
+						},
+					},
+				},
+			},
+		}
+
+		participants := []types.Participant{
+			{Address: "participant1", CoinBalance: 0, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+			{Address: "participant2", CoinBalance: 0, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+		}
+
+		logger := createTestLogger(t)
+		results, _, err := CalculateParticipantBitcoinRewards(participants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+
+		// Effective weights (no collateral scaling, Weight == sum(PocWeights)):
+		// participant1: preserved(100) + confirmed(600) = 700
+		// participant2: preserved(0) + confirmed(100) = 100
+		// Power capping: P1 has 700/800 = 87.5% > 50%, capped to 100
+		// After capping: P1=100, P2=100
+		// Denominator = totalFullWeight = 700 + 100 = 800
+		// P1: 100/800 * 1000 = 125
+		// P2: 100/800 * 1000 = 125
+		// Governance gets 750
+		totalDistributed := results[0].Settle.RewardCoins + results[1].Settle.RewardCoins
+		require.LessOrEqual(t, totalDistributed, uint64(1000), "total distributed should not exceed epoch reward")
+
+		// P1 was capped (should get far less than 87.5%)
+		participant1Percentage := float64(results[0].Settle.RewardCoins) / 1000.0
+		require.LessOrEqual(t, participant1Percentage, 0.20, "participant1 should be power-capped well below 87.5%")
+
+		// Both should get equal rewards after capping
+		require.Equal(t, results[0].Settle.RewardCoins, results[1].Settle.RewardCoins, "equal capped weights yield equal rewards")
+	})
+}
+
+// Test edge cases
+func TestCalculateParticipantBitcoinRewards_ConfirmationEdgeCases(t *testing.T) {
+	t.Run("Single participant with confirmation capping", func(t *testing.T) {
+		bitcoinParams := &types.BitcoinRewardParams{
+			GenesisEpoch:       1,
+			InitialEpochReward: 500,
+			DecayRate:          types.DecimalFromFloat(0.0),
+		}
+
+		epochGroupData := &types.EpochGroupData{
+			EpochIndex: 1,
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress: "participant1",
+					// Reading after CPoC: preserved(100) + measured(150) = 250.
+					Weight:             300,
+					ConfirmationWeight: 250,
+				},
+			},
+		}
+
+		participants := []types.Participant{
+			{Address: "participant1", CoinBalance: 0, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+		}
+
+		logger := createTestLogger(t)
+		results, bitcoinResult, err := CalculateParticipantBitcoinRewards(participants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(results))
+
+		// Effective = ConfirmationWeight = 250.
+		// No collateral scaling, no power capping (single participant).
+		// Denominator = totalFullWeight = 300. Reward = 250/300 * 500 = 416.
+		require.Equal(t, uint64(416), results[0].Settle.RewardCoins, "Single participant gets proportional reward")
+		require.Equal(t, int64(500), bitcoinResult.Amount)
+	})
+
+	t.Run("All participants have zero effective weight", func(t *testing.T) {
+		bitcoinParams := &types.BitcoinRewardParams{
+			GenesisEpoch:       1,
+			InitialEpochReward: 1000,
+			DecayRate:          types.DecimalFromFloat(0.0),
+		}
+
+		epochGroupData := &types.EpochGroupData{
+			EpochIndex: 1,
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             100,
+					ConfirmationWeight: 0,
+					MlNodes: []*types.MLNodeInfo{
+						{
+							NodeId:             "node1",
+							PocWeight:          100,
+							TimeslotAllocation: []bool{true, false}, // POC_SLOT=false, no preserved
+						},
+					},
+				},
+			},
+		}
+
+		participants := []types.Participant{
+			{Address: "participant1", CoinBalance: 100, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+		}
+
+		logger := createTestLogger(t)
+		results, _, err := CalculateParticipantBitcoinRewards(participants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+
+		// With zero effective weight, participant gets no reward coins (but still gets work coins)
+		require.Equal(t, uint64(0), results[0].Settle.RewardCoins, "Zero effective weight means no reward")
+		require.Equal(t, uint64(100), results[0].Settle.WorkCoins, "Work coins still distributed")
+	})
+}
+
+// Test that collateral weight adjustment scales effectiveWeight proportionally
+func TestCalculateParticipantBitcoinRewards_CollateralWeightAdjustment(t *testing.T) {
+	t.Run("Undercollateralized participant gets proportionally less reward", func(t *testing.T) {
+		bitcoinParams := &types.BitcoinRewardParams{
+			GenesisEpoch:       1,
+			InitialEpochReward: 1200,
+			DecayRate:          types.DecimalFromFloat(0.0),
+		}
+
+		// Both participants finished the epoch with a full reading of 1000
+		// (preserved 200 + measured 800). Collateral scaling only affects P1.
+		epochGroupData := &types.EpochGroupData{
+			EpochIndex: 1,
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             200, // Collateral-adjusted from raw 1000 (20% ratio)
+					ConfirmationWeight: 1000,
+					MlNodes: []*types.MLNodeInfo{
+						{NodeId: "node1", PocWeight: 200},
+						{NodeId: "node2", PocWeight: 800},
+					},
+				},
+				{
+					MemberAddress:      "participant2",
+					Weight:             1000, // Full collateral
+					ConfirmationWeight: 1000,
+					MlNodes: []*types.MLNodeInfo{
+						{NodeId: "node3", PocWeight: 200},
+						{NodeId: "node4", PocWeight: 800},
+					},
+				},
+			},
+		}
+
+		participants := []types.Participant{
+			{Address: "participant1", CoinBalance: 0, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+			{Address: "participant2", CoinBalance: 0, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+		}
+
+		logger := createTestLogger(t)
+		results, _, err := CalculateParticipantBitcoinRewards(participants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+		require.Equal(t, 2, len(results))
+
+		// P1: effectiveWeight = 1000 * 200/1000 = 200
+		// P2: effectiveWeight = 1000 (Weight == rawTotal, no scaling)
+		// Power capping: P2 at 1000/1200 = 83% > 50%, capped to 200.
+		// Denominator = totalFullWeight = 200 + 1000 = 1200.
+		// Both: 200/1200 * 1200 = 200.
+		require.Equal(t, uint64(200), results[0].Settle.RewardCoins, "P1 reward matches collateral-adjusted weight")
+		require.Equal(t, uint64(200), results[1].Settle.RewardCoins, "P2 power-capped to same level")
+	})
+
+	t.Run("Full collateral participants are unaffected", func(t *testing.T) {
+		bitcoinParams := &types.BitcoinRewardParams{
+			GenesisEpoch:       1,
+			InitialEpochReward: 600,
+			DecayRate:          types.DecimalFromFloat(0.0),
+		}
+
+		// Full reading (preserved 200 + measured 300 = 500) for each participant.
+		epochGroupData := &types.EpochGroupData{
+			EpochIndex: 1,
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             500,
+					ConfirmationWeight: 500,
+					MlNodes: []*types.MLNodeInfo{
+						{NodeId: "node1", PocWeight: 200},
+						{NodeId: "node2", PocWeight: 300},
+					},
+				},
+				{
+					MemberAddress:      "participant2",
+					Weight:             500,
+					ConfirmationWeight: 500,
+					MlNodes: []*types.MLNodeInfo{
+						{NodeId: "node3", PocWeight: 200},
+						{NodeId: "node4", PocWeight: 300},
+					},
+				},
+			},
+		}
+
+		participants := []types.Participant{
+			{Address: "participant1", CoinBalance: 0, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+			{Address: "participant2", CoinBalance: 0, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+		}
+
+		logger := createTestLogger(t)
+		results, _, err := CalculateParticipantBitcoinRewards(participants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+
+		// Weight == rawTotal for both -> no scaling. effective = 500 each.
+		// totalFullWeight = 1000. 500/1000 * 600 = 300.
+		require.Equal(t, uint64(300), results[0].Settle.RewardCoins)
+		require.Equal(t, uint64(300), results[1].Settle.RewardCoins)
+	})
+
+	t.Run("Partial collateral scales proportionally", func(t *testing.T) {
+		bitcoinParams := &types.BitcoinRewardParams{
+			GenesisEpoch:       1,
+			InitialEpochReward: 1000,
+			DecayRate:          types.DecimalFromFloat(0.0),
+		}
+
+		// Single participant with 60% collateral ratio: Weight=600, rawTotal=1000.
+		// Full reading = 1000.
+		epochGroupData := &types.EpochGroupData{
+			EpochIndex: 1,
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             600,
+					ConfirmationWeight: 1000,
+					MlNodes: []*types.MLNodeInfo{
+						{NodeId: "node1", PocWeight: 200},
+						{NodeId: "node2", PocWeight: 800},
+					},
+				},
+			},
+		}
+
+		participants := []types.Participant{
+			{Address: "participant1", CoinBalance: 0, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+		}
+
+		logger := createTestLogger(t)
+		results, _, err := CalculateParticipantBitcoinRewards(participants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+
+		// effectiveWeight = 1000 * 600/1000 = 600. totalFullWeight = 600.
+		// reward = 600/600 * 1000 = 1000.
+		require.Equal(t, uint64(1000), results[0].Settle.RewardCoins, "single participant gets full reward after scaling")
+	})
+
+	t.Run("Weight exceeding rawTotal still scales confirmed fraction", func(t *testing.T) {
+		// Delegation or adjustments can make vw.Weight exceed rawTotal. An honest
+		// participant with ConfirmationWeight == rawTotal still receives vw.Weight.
+		bitcoinParams := &types.BitcoinRewardParams{
+			GenesisEpoch:       1,
+			InitialEpochReward: 1000,
+			DecayRate:          types.DecimalFromFloat(0.0),
+		}
+
+		epochGroupData := &types.EpochGroupData{
+			EpochIndex: 1,
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             1200, // vw.Weight > sum(PocWeights) due to power cap redistribution
+					ConfirmationWeight: 1000,
+					MlNodes: []*types.MLNodeInfo{
+						{NodeId: "node1", PocWeight: 200},
+						{NodeId: "node2", PocWeight: 800},
+					},
+				},
+			},
+		}
+
+		participants := []types.Participant{
+			{Address: "participant1", CoinBalance: 0, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+		}
+
+		logger := createTestLogger(t)
+		results, _, err := CalculateParticipantBitcoinRewards(participants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+
+		// effective = Weight(1200) * ConfirmationWeight(1000) / rawTotal(1000) = 1200.
+		require.Equal(t, uint64(1000), results[0].Settle.RewardCoins, "honest delegate gets full reward")
+	})
+
+	t.Run("Zero effective weight after scaling stays zero", func(t *testing.T) {
+		bitcoinParams := &types.BitcoinRewardParams{
+			GenesisEpoch:       1,
+			InitialEpochReward: 1000,
+			DecayRate:          types.DecimalFromFloat(0.0),
+		}
+
+		// All nodes are POC_SLOT=false with zero confirmation -> effectiveWeight=0 before scaling
+		epochGroupData := &types.EpochGroupData{
+			EpochIndex: 1,
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             200, // Undercollateralized
+					ConfirmationWeight: 0,   // Nothing confirmed
+					MlNodes: []*types.MLNodeInfo{
+						{NodeId: "node1", PocWeight: 1000, TimeslotAllocation: []bool{true, false}},
+					},
+				},
+			},
+		}
+
+		participants := []types.Participant{
+			{Address: "participant1", CoinBalance: 0, Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+		}
+
+		logger := createTestLogger(t)
+		results, _, err := CalculateParticipantBitcoinRewards(participants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+
+		// effectiveWeight = 0 (no preserved, no confirmed) -> scaling produces 0
+		require.Equal(t, uint64(0), results[0].Settle.RewardCoins)
+	})
+
+	t.Run("Weight below rawTotal rescales proportionally regardless of collateral state", func(t *testing.T) {
+		bitcoinParams := &types.BitcoinRewardParams{
+			GenesisEpoch:       1,
+			InitialEpochReward: 750,
+			DecayRate:          types.DecimalFromFloat(0.0),
+		}
+
+		// participant1: Weight(300) < rawTotal(303). Scaling must apply.
+		// participant2, participant3: Weight == rawTotal. Scaling no-op.
+		epochGroupData := &types.EpochGroupData{
+			EpochIndex: 4,
+			ValidationWeights: []*types.ValidationWeight{
+				{
+					MemberAddress:      "participant1",
+					Weight:             300,
+					ConfirmationWeight: 203,
+					MlNodes: []*types.MLNodeInfo{
+						{NodeId: "node1", PocWeight: 101},
+						{NodeId: "node2", PocWeight: 202},
+					},
+				},
+				{
+					MemberAddress:      "participant2",
+					Weight:             200,
+					ConfirmationWeight: 200,
+					MlNodes: []*types.MLNodeInfo{
+						{NodeId: "node3", PocWeight: 200},
+					},
+				},
+				{
+					MemberAddress:      "participant3",
+					Weight:             250,
+					ConfirmationWeight: 250,
+					MlNodes: []*types.MLNodeInfo{
+						{NodeId: "node4", PocWeight: 250},
+					},
+				},
+			},
+		}
+
+		participants := []types.Participant{
+			{Address: "participant1", Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+			{Address: "participant2", Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+			{Address: "participant3", Status: types.ParticipantStatus_ACTIVE, CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 100, MissedRequests: 0}},
+		}
+
+		logger := createTestLogger(t)
+		results, _, err := CalculateParticipantBitcoinRewards(participants, epochGroupData, bitcoinParams, nil, modelNodesAndScales(epochGroupData), logger)
+		require.NoError(t, err)
+		require.Len(t, results, 3)
+
+		// p1: effective = 203 * 300 / 303 = 200 (truncated). totalFullWeight = 750.
+		// p1 reward = 200/750 * 750 = 200. p2 = 200. p3 = 250. Remainder (750-650)=100 -> governance.
+		require.Equal(t, uint64(200), results[0].Settle.RewardCoins)
+		require.Equal(t, uint64(200), results[1].Settle.RewardCoins)
+		require.Equal(t, uint64(250), results[2].Settle.RewardCoins)
+	})
+}
+
+func TestGetDynamicP0(t *testing.T) {
+	logger := createTestLogger(t)
+
+	t.Run("Healthy epoch uses governance p0", func(t *testing.T) {
+		minTotal := dynamicP0MinTotalRequests
+		p1 := minTotal / 5
+		p2 := minTotal / 5
+		p3 := minTotal / 5
+		p4 := minTotal / 5
+		p5 := minTotal - p1 - p2 - p3 - p4
+
+		participants := []types.Participant{
+			{Address: "p1", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: p1, MissedRequests: 0}},
+			{Address: "p2", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: p2, MissedRequests: 0}},
+			{Address: "p3", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: p3, MissedRequests: 0}},
+			{Address: "p4", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: p4, MissedRequests: 0}},
+			{Address: "p5", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: p5, MissedRequests: 0}},
+		}
+
+		p0, skipPunishment := getDynamicP0(participants, nil, 1, logger)
+		require.NotNil(t, p0)
+		require.False(t, skipPunishment)
+		require.Equal(t, int64(100), p0.Value)
+		require.Equal(t, int32(-3), p0.Exponent)
+	})
+
+	t.Run("Degraded epoch selects 0.20", func(t *testing.T) {
+		participants := []types.Participant{
+			{Address: "p1", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 220, MissedRequests: 30}},
+			{Address: "p2", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 220, MissedRequests: 30}},
+			{Address: "p3", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 176, MissedRequests: 24}},
+			{Address: "p4", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 132, MissedRequests: 18}},
+			{Address: "p5", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 132, MissedRequests: 18}},
+		}
+
+		p0, skipPunishment := getDynamicP0(participants, nil, 1, logger)
+		require.NotNil(t, p0)
+		require.False(t, skipPunishment)
+		require.Equal(t, int64(200), p0.Value)
+		require.Equal(t, int32(-3), p0.Exponent)
+	})
+
+	t.Run("Snaps up to next supported table", func(t *testing.T) {
+		participants := []types.Participant{
+			{Address: "p1", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 205, MissedRequests: 45}},
+			{Address: "p2", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 205, MissedRequests: 45}},
+			{Address: "p3", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 164, MissedRequests: 36}},
+			{Address: "p4", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 123, MissedRequests: 27}},
+			{Address: "p5", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 122, MissedRequests: 28}},
+		}
+
+		p0, skipPunishment := getDynamicP0(participants, nil, 1, logger)
+		require.NotNil(t, p0)
+		require.False(t, skipPunishment)
+		require.Equal(t, int64(300), p0.Value)
+		require.Equal(t, int32(-3), p0.Exponent)
+	})
+
+	t.Run("Outage circuit breaker triggers at 0.50", func(t *testing.T) {
+		participants := []types.Participant{
+			{Address: "p1", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 104, MissedRequests: 96}},
+			{Address: "p2", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 104, MissedRequests: 96}},
+			{Address: "p3", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 104, MissedRequests: 96}},
+			{Address: "p4", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 104, MissedRequests: 96}},
+			{Address: "p5", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 104, MissedRequests: 96}},
+		}
+
+		p0, skipPunishment := getDynamicP0(participants, nil, 1, logger)
+		require.NotNil(t, p0)
+		require.True(t, skipPunishment)
+		require.Equal(t, int64(500), p0.Value)
+		require.Equal(t, int32(-3), p0.Exponent)
+	})
+
+	t.Run("Small sample falls back to governance", func(t *testing.T) {
+		participants := []types.Participant{
+			{Address: "p1", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 50, MissedRequests: 50}},
+			{Address: "p2", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: 50, MissedRequests: 50}},
+		}
+
+		p0, skipPunishment := getDynamicP0(participants, nil, 1, logger)
+		require.NotNil(t, p0)
+		require.False(t, skipPunishment)
+		require.Equal(t, int64(100), p0.Value)
+		require.Equal(t, int32(-3), p0.Exponent)
+	})
+
+	t.Run("Never stricter than governance", func(t *testing.T) {
+		validationParams := &types.ValidationParams{BinomTestP0: permilleToP0Decimal(300)}
+
+		minTotal := dynamicP0MinTotalRequests
+		p1 := minTotal / 5
+		p2 := minTotal / 5
+		p3 := minTotal / 5
+		p4 := minTotal / 5
+		p5 := minTotal - p1 - p2 - p3 - p4
+		participants := []types.Participant{
+			{Address: "p1", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: p1, MissedRequests: 0}},
+			{Address: "p2", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: p2, MissedRequests: 0}},
+			{Address: "p3", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: p3, MissedRequests: 0}},
+			{Address: "p4", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: p4, MissedRequests: 0}},
+			{Address: "p5", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: p5, MissedRequests: 0}},
+		}
+
+		p0, skipPunishment := getDynamicP0(participants, validationParams, 1, logger)
+		require.NotNil(t, p0)
+		require.False(t, skipPunishment)
+		require.Equal(t, int64(300), p0.Value)
+		require.Equal(t, int32(-3), p0.Exponent)
+	})
+
+	t.Run("Governance p0 snaps to supported table", func(t *testing.T) {
+		validationParams := &types.ValidationParams{BinomTestP0: &types.Decimal{Value: 12, Exponent: -2}}
+
+		minTotal := dynamicP0MinTotalRequests
+		p1 := minTotal / 5
+		p2 := minTotal / 5
+		p3 := minTotal / 5
+		p4 := minTotal / 5
+		p5 := minTotal - p1 - p2 - p3 - p4
+		participants := []types.Participant{
+			{Address: "p1", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: p1, MissedRequests: 0}},
+			{Address: "p2", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: p2, MissedRequests: 0}},
+			{Address: "p3", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: p3, MissedRequests: 0}},
+			{Address: "p4", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: p4, MissedRequests: 0}},
+			{Address: "p5", CurrentEpochStats: &types.CurrentEpochStats{InferenceCount: p5, MissedRequests: 0}},
+		}
+
+		p0, skipPunishment := getDynamicP0(participants, validationParams, 1, logger)
+		require.NotNil(t, p0)
+		require.False(t, skipPunishment)
+		require.Equal(t, int64(200), p0.Value)
+		require.Equal(t, int32(-3), p0.Exponent)
+	})
+}
