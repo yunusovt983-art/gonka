@@ -8,6 +8,7 @@
 
 | Документ | Содержание |
 |---|---|
+| [🚁 Helicopter View](architecture/helicopter-view.md) | Вид с высоты птичьего полёта в ANSI-стиле: вся система на одном экране, DDD-классификация поддоменов, правило зависимостей. |
 | [00 · Единая карта системы](architecture/00-system-map.md) | 🗺️ Мастер-диаграмма всех компонентов и потоков + flow-схемы (власть, инференс, эпоха, devshard, мост). |
 | [01 · Core: Proof of Compute](architecture/01-core-proof-of-compute.md) | Ядро домена. Эпохи, PoC 2.0, валидация инференса (SPRT), вес→консенсус. |
 | [02 · Supporting contexts](architecture/02-supporting-contexts.md) | BLS-порог, collateral, streamvesting, restrictions, genesistransfer, bookkeeper. |

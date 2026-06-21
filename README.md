@@ -6,6 +6,7 @@
 
 ## Навигация
 
+- **[🚁 Helicopter View](architecture/helicopter-view.md)** — вид с высоты птичьего полёта (ANSI): вся система на одном экране в философии DDD.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — точка входа: стратегический DDD (Context Map, классификация поддоменов, Ubiquitous Language).
 - **[architecture/00-system-map.md](architecture/00-system-map.md)** — 🗺️ единая мастер-диаграмма всех компонентов и потоков.
 - **[architecture/01..11](architecture/)** — тактические разборы: ядро PoC, спутниковые контексты, оркестратор, devshard, экономика, ML-узел, мост, эволюция, глубокие механизмы.
