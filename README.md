@@ -62,4 +62,5 @@
 
 ## Лицензия
 
-[Gonka License](LICENSE.md) — как у исходного проекта gonka: модифицированная Apache 2.0 с ограничением на форк (© Product Science, Inc.).
+- **Исходный код gonka** (каталог `repo/`) — [Gonka License](LICENSE.md): как у исходного проекта gonka — модифицированная Apache 2.0 с ограничением на форк (© Product Science, Inc.).
+- **Архитектурный обзор** (документация: `ARCHITECTURE.md`, `architecture/`, `Wiki/`, `REVIEW.md`) — выполнен на основе лицензии [AGPL-3.0](LICENSE-AGPL.md).
