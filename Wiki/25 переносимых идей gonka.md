@@ -11,6 +11,27 @@ updated: 2026-06-20
 > блокчейн. Каждая идея: формулировка → где в коде. Полный разбор —
 > `/Volumes/Kingston/Agent/gonka/architecture/06-ideas-catalog.md`.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["25 идей по 7 категориям — что утащить в свою систему"]:::note
+    C1["Консенсус<br/>полезный PoW · разделение власти"]:::core
+    C2["Детерминизм<br/>commit-reveal · без float/rand"]:::coresub
+    C3["Антифрод<br/>SPRT · таблицы · авто-выключатель"]:::coresub
+    C4["off↔on-chain<br/>MMR · обязательства"]:::adapter
+    C5["Оркестрация<br/>реконсилятор · stale-guard"]:::adapter
+    C6["Экономика<br/>фикс-пул · без перераспределения"]:::adapter
+    C7["Devshard / версии<br/>нонс 3-в-1 · partition-prune"]:::entry
+    NOTE -.-> C1
+    C1 --- C2 --- C3 --- C4
+    C5 --- C6 --- C7
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
 ## 🧭 Консенсус и распределённость
 1. **Полезный PoW** — если у сети уже есть дорогая полезная работа, сделай её самим
    механизмом Сивилл-устойчивости. → [[Proof of Compute 2.0 — власть есть вычисление]]

@@ -18,6 +18,27 @@ updated: 2026-06-20
 застейканным токенам: «бесполезный» PoW заменён работой на трансформерах,
 релевантной реальной нагрузке сети.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["второй мозг gonka: первопринципы → домены → подсистемы → синтез"]:::note
+    CORE["Первопринципы<br/>compute=власть · детерминизм · off-chain"]:::core
+    DOM["Доменные понятия<br/>эпоха · PoC · веса · награды · BLS"]:::coresub
+    OFF["Off-chain<br/>dapi · ml node · devshard"]:::adapter
+    EVO["Мост и эволюция<br/>EVM · апгрейды · обучение"]:::adapter
+    SYN["Синтез<br/>25 переносимых идей"]:::entry
+    NOTE -.-> CORE
+    CORE -->|"раскрываются в"| DOM
+    DOM -->|"обслуживаются"| OFF
+    DOM -->|"расширяются"| EVO
+    DOM -->|"дистиллируются в"| SYN
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
 ## 🧭 Навигация
 
 ### Головные заметки (архитектура)

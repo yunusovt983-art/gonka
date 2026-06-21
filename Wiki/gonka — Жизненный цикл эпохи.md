@@ -44,6 +44,22 @@ sequenceDiagram
     D->>D: recovery пропущенных валидаций → claim наград
 ```
 
+## 💻 Код (`inference-chain/x/inference/types/epoch_context.go:220`)
+```go
+// Стадия эпохи = чистая функция от высоты блока (без побочных эффектов).
+func (ec *EpochContext) IsStartOfPocStage(blockHeight int64) bool {
+    return blockHeight == ec.StartOfPoC()
+}
+func (ec *EpochContext) IsEndOfPoCValidationStage(blockHeight int64) bool {
+    if ec.EpochIndex == 0 { return false } // эпоха 0 — особая, без PoC
+    return blockHeight == ec.EndOfPoCValidation()
+}
+func (ec *EpochContext) IsSetNewValidatorsStage(blockHeight int64) bool {
+    if ec.EpochIndex == 0 { return false }
+    return blockHeight == ec.SetNewValidators()
+}
+```
+
 ## Стадии (порядок проверки в `EndBlock`)
 
 | Стадия | Что происходит | Заметка |

@@ -49,6 +49,25 @@ flowchart TB
     BLS -->|threshold sig| EVM
 ```
 
+## 💻 Код (`inference-chain/x/inference/types/expected_keepers.go:77`)
+```go
+// Ядро x/inference объявляет, ЧТО ему нужно от соседей (ACL).
+// Интерфейсы реализуют сами модули — зависимость направлена К ядру.
+type StakingKeeper interface {
+    SetComputeValidators(ctx context.Context, computeResults []keeper.ComputeResult, isTestnet bool) ([]types.Validator, error)
+}
+type CollateralKeeper interface {
+    AdvanceEpoch(ctx context.Context, completedEpoch uint64) error
+}
+type StreamVestingKeeper interface {
+    AddVestedRewards(ctx context.Context, participantAddress, fundingModule string, amount sdk.Coins, vestingEpochs *uint64, memo string) error
+    AdvanceEpoch(ctx context.Context, completedEpoch uint64) error
+}
+type BlsKeeper interface {
+    InitiateKeyGenerationForEpoch(ctx sdk.Context, epochID uint64, finalizedParticipants []blstypes.ParticipantWithWeightAndKey) error
+}
+```
+
 ## Роли контекстов (кратко)
 
 | Контекст | Тип DDD | Ответственность | Ключевая заметка |
