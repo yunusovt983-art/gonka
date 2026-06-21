@@ -5,6 +5,30 @@
 
 ---
 
+## 🗺️ Обзор
+
+```mermaid
+flowchart TB
+    NOTE["одно governance-событие координирует три независимо версионируемых бинаря"]:::note
+    GOV["MsgSoftwareUpgrade / PartialUpgrade<br/>power-weighted голос"]:::core
+    CV["cosmovisor<br/>меняет только inferenced"]:::coresub
+    DAPI["dapi upgrade<br/>full / partial (без halt)"]:::adapter
+    ML["ml node<br/>node_version"]:::adapter
+    TM["Testermint (E2E)<br/>исполняемая спецификация инвариантов"]:::entry
+    NOTE -.-> GOV
+    GOV -->|"на высоте: halt + migrate"| CV
+    GOV -->|"block-события"| DAPI
+    DAPI -->|"сигнал версии"| ML
+    TM -.->|"проверяет всё перед релизом"| GOV
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+---
+
 ## 1. Обучение (DiLoCo) — построено, затем удалено
 
 README репозитория рекламирует geo-distributed training. **Реальность: это удалённая фича, не roadmap и не live.**

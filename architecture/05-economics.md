@@ -3,6 +3,30 @@
 > Срез по `docs/tokenomics.md`, `voting.md`, `cosmos_changes.md`, `binom-stattest.md`, `proposals/tokenomics-v2/`, `genesis/genesis.json`.
 > Назад к [индексу](../ARCHITECTURE.md).
 
+## 🗺️ Обзор
+
+```mermaid
+flowchart TB
+    NOTE["две монеты: оплата 1:1 (WorkCoins) + субсидия из фикс-пула по доле веса (RewardCoins)"]:::note
+    WORK["Оплата инференса<br/>WorkFee = токены × PerTokenPrice"]:::adapter
+    POOL["Фикс-пул эмиссии<br/>Initial × exp(decay·epoch)"]:::core
+    WEIGHT["Доля PoC-веса<br/>+ залог (collateral)"]:::coresub
+    VEST["streamvesting<br/>180 эпох, по одной"]:::adapter
+    GOV["gov-аккаунт<br/>не перераспределяется"]:::entry
+    NOTE -.-> POOL
+    WORK -->|"кто заработал"| VEST
+    POOL -->|"× доля"| WEIGHT
+    WEIGHT -->|"RewardCoins"| VEST
+    WEIGHT -->|"кап/простой/инвалид → остаток"| GOV
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+---
+
 ## 1. Токен
 
 **Нативный токен: Gonka.** `inference-chain/denom.json`:

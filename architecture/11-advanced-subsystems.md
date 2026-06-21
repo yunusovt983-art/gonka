@@ -5,6 +5,25 @@
 
 ---
 
+## 🗺️ Обзор
+
+```mermaid
+flowchart TB
+    NOTE["три механизма второго порядка вокруг ядра PoC"]:::note
+    A["A. PoC-делегирование<br/>N→1 передача веса, single-hop"]:::core
+    B["B. Анатомия апгрейда<br/>миграция императивна в хендлере"]:::coresub
+    C["C. Bandwidth limiter<br/>честная доля = chain-wide / N"]:::coresub
+    NOTE -.-> A
+    A --- B --- C
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+---
+
 ## A. PoC-делегирование (N→1 передача consensus-веса)
 
 Часть multi-model PoC (`proposals/multi-model-poc/`). Код: `x/inference/module/delegation_*.go`, `keeper/poc_delegation.go`.

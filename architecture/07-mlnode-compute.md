@@ -7,6 +7,30 @@ ML-узел — GPU-воркер, с которым Go-сторона (`mlnodecl
 
 > **Главное открытие:** существуют **две разные реализации Proof of Compute**, и та, что цепь использует сегодня (PoC v2), живёт **не в пакете `pow`**, а внутри форка vLLM, который пакет `api` лишь проксирует.
 
+## 🗺️ Обзор
+
+```mermaid
+flowchart TB
+    NOTE["Go-сторона говорит с ML-узлом только по REST api-пакета · живой PoC v2 — внутри форка vLLM"]:::note
+    DAPI["dapi (Go)<br/>mlnodeclient"]:::entry
+    API["api — reverse-proxy<br/>least-connections"]:::core
+    VLLM["форк vLLM<br/>инференс + PoC v2 (k_dim=12)"]:::coresub
+    POW["pow — движок PoC v1<br/>расстояние на сфере"]:::coresub
+    TRAIN["train — DiLoCo<br/>отвязан от цепи"]:::adapter
+    NOTE -.-> API
+    DAPI -->|"/api/v1/..."| API
+    API -->|"инференс · PoC v2"| VLLM
+    API -->|"PoC v1 (референс)"| POW
+    API -.->|"standalone"| TRAIN
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+---
+
 ## 0. Две реализации PoC (важное разграничение)
 
 | | **PoC v1 (`pow`)** | **PoC v2 (форк vLLM + прокси `api`)** |

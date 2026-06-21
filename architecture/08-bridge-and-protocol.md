@@ -5,6 +5,29 @@
 
 ---
 
+## 🗺️ Обзор
+
+```mermaid
+flowchart TB
+    NOTE["мост авторизуется порогом BLS живой эпохи; вход — >50% власти валидаторов"]:::note
+    EVM["EVM-цепь<br/>BridgeContract = WGNK"]:::entry
+    RLY["релеер<br/>geth + prysm"]:::adapter
+    CORE["x/inference<br/>bridge-обработчики · escrow"]:::core
+    BLS["x/bls<br/>пороговая подпись"]:::coresub
+    EVM -->|"депозит"| RLY
+    RLY -->|"MsgBridgeExchange (>50%)"| CORE
+    CORE -->|"RequestThresholdSignature"| BLS
+    BLS -->|"подпись → mint/withdraw"| EVM
+    NOTE -.-> CORE
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+---
+
 # Часть A — EVM-мост
 
 ## Назначение

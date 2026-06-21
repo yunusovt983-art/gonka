@@ -5,6 +5,29 @@
 
 ---
 
+## 🗺️ Обзор
+
+```mermaid
+flowchart TB
+    NOTE["переносимые инженерные идеи gonka — по областям"]:::note
+    A["A. Консенсус<br/>полезный PoW · разделение власти"]:::core
+    B["B. Детерминизм<br/>commit-reveal · без float/rand"]:::coresub
+    C["C. Антифрод<br/>SPRT · таблицы · авто-выключатель"]:::coresub
+    D["D. off↔on-chain<br/>MMR · обязательства · ленивая выборка"]:::adapter
+    E["E. Оркестрация<br/>реконсилятор · stale-guard · long-poll"]:::adapter
+    F["F. Экономика/devshard<br/>фикс-пул · нонс 3-в-1 · версии"]:::entry
+    NOTE -.-> A
+    A --- B --- C
+    D --- E --- F
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+---
+
 ## A. Консенсус и распределённые системы
 
 ### A1. «Полезный» Proof of Work
