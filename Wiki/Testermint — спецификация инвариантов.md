@@ -13,6 +13,37 @@ updated: 2026-06-20
 > E2E-покрытия — самый честный сигнал того, что в системе несущее**. Что бьются проверять
 > end-to-end — то и держит систему.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["Реальные узлы цепи+API в Docker, мок только GPU; широта E2E = что несущее"]:::note
+    HARNESS["Testermint<br/>Kotlin/Gradle E2E"]:::core
+    PAIR["LocalInferencePair<br/>inferenced + decentralized-api"]:::coresub
+    MOCK["Mock ML-узел<br/>Ktor, стейт-машина POW/INFERENCE"]:::adapter
+    STAGES["EpochStage<br/>реальный жизненный цикл эпохи"]:::entry
+    HARNESS -->|"поднимает"| PAIR
+    PAIR -->|"мокает GPU"| MOCK
+    HARNESS -->|"гоняет тест через"| STAGES
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`testermint/src/main/kotlin/Epochs.kt:6`)
+```kotlin
+enum class EpochStage {
+    START_OF_POC,
+    END_OF_POC,
+    POC_EXCHANGE_DEADLINE,
+    START_OF_POC_VALIDATION,
+    END_OF_POC_VALIDATION,
+    SET_NEW_VALIDATORS,
+    CLAIM_REWARDS
+}
+```
+
 ## Как устроен
 - Поднимает реальные `inferenced` + `decentralized-api` через compose-файлы
   (`local-test-net/docker-compose-*.yml`); каждый участник = `LocalInferencePair`

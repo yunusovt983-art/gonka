@@ -13,6 +13,45 @@ updated: 2026-06-20
 > а `Metadata` члена несёт ed25519-pubkey валидатора. Так готовый модуль голосований
 > становится носителем «внутренней» власти сети.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["вес члена x/group = PoC-вес, Metadata = pubkey валидатора<br/>готовый модуль голосований несёт внутреннюю власть"]:::note
+    ROOT["root-группа<br/>ModelId = ''"]:::core
+    SUB["подгруппа модели<br/>ModelId = id"]:::coresub
+    POLICY["PercentageDecisionPolicy<br/>порог 0.50, 4m"]:::coresub
+    MEMBER["Член группы<br/>Weight + Metadata=pubkey"]:::adapter
+    RESULT["GetComputeResults<br/>ComputeResult[]"]:::entry
+    NOTE -.-> ROOT
+    ROOT -->|"содержит"| SUB
+    ROOT -->|"управляется"| POLICY
+    ROOT -->|"состоит из"| MEMBER
+    MEMBER -->|"вес → Power"| RESULT
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`inference-chain/x/inference/epochgroup/epoch_group.go:398`)
+```go
+for _, member := range members {
+    pubKeyBytes, err := base64.StdEncoding.DecodeString(member.Member.Metadata)
+    // ...
+    // The VALIDATOR key (ed25519), never to be confused with the account key
+    pubKey := ed25519.PubKey{Key: pubKeyBytes}
+    accAddr, err := sdk.AccAddressFromBech32(member.Member.Address)
+    // ...
+    valOperatorAddr := sdk.ValAddress(accAddr).String()
+    computeResults = append(computeResults, keeper.ComputeResult{
+        Power:           getWeight(member),
+        ValidatorPubKey: &pubKey,
+        OperatorAddress: valOperatorAddr,
+    })
+}
+```
+
 ## Два уровня групп
 | Группа | `ModelId` | Состав | Роль |
 |---|---|---|---|

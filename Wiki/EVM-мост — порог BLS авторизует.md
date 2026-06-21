@@ -13,6 +13,42 @@ updated: 2026-06-20
 > операции внутрь (EVM→Gonka) требуют **>50% власти** валидаторов, каждый из которых
 > независимо ре-выводит транзакцию из EVM-receipt. Та же DKG-группа, что и в консенсусе.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["Нет доверенного минтера: внутрь — >50% власти, наружу — пороговая BLS-подпись"]:::note
+    EVM["EVM-receipt<br/>источник события"]:::entry
+    INBOUND["MsgBridgeExchange<br/>валидаторы ре-выводят tx"]:::coresub
+    GATE["Проверка кворума<br/>TotalValidationPower ≥ 50%+1"]:::core
+    MINT["BRIDGE_COMPLETED<br/>минт один раз"]:::adapter
+    EVM -->|"независимая верификация"| INBOUND
+    INBOUND -->|"аккумуляция власти"| GATE
+    GATE -->|"порог достигнут"| MINT
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`inference-chain/x/inference/keeper/msg_server_bridge_exchange.go:172`)
+```go
+// Check if we have majority (50+% of total power)
+requiredPower := (totalEpochPower / 2) + 1
+
+if existingTx.TotalValidationPower >= requiredPower {
+    // Only process completion once to avoid duplicate mints
+    if existingTx.Status == types.BridgeTransactionStatus_BRIDGE_PENDING {
+        existingTx.Status = types.BridgeTransactionStatus_BRIDGE_COMPLETED
+        k.SetBridgeTransaction(ctx, existingTx)
+        // Handle token minting for completed transaction
+        if err := k.handleCompletedBridgeTransaction(ctx, existingTx); err != nil {
+            // ...
+        }
+    }
+}
+```
+
 ## Две оси активов
 - Нативный Gonka ↔ **WGNK** (ERC-20 от того же контракта, 9 знаков).
 - EVM ERC-20/ETH ↔ обёрнутый **CW20** на Gonka.

@@ -14,6 +14,44 @@ updated: 2026-06-20
 > payment-channel, специализированный под метрируемый AI-compute. Заголовочная фича
 > слоя `v0.2.13`.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["Бухгалтерия off-chain в стейт-машине, цепь трогаем лишь дважды"]:::note
+    OPEN["Открыть эскроу<br/>лочит amount · группа 16 слотов"]:::entry
+    SM["Стейт-машина<br/>детерминированный учёт денег"]:::core
+    DIFF["User Diff<br/>Nonce · Txs · UserSig"]:::coresub
+    HOST["Хост<br/>проверяет · СО-подписывает root"]:::adapter
+    SETTLE["Расчёт on-chain<br/>кворум 2/3+1 · платит"]:::entry
+    NOTE -.-> SM
+    OPEN -->|"пинит группу"| SM
+    DIFF -->|"на каждый инференс"| SM
+    SM -->|"state root"| HOST
+    HOST -->|"со-подпись"| SETTLE
+    SM -->|"пересчёт корня"| SETTLE
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`devshard/state/machine.go:697`)
+```go
+// Executor slot: group[inference_id % len(group)].SlotID
+executorSlot := sm.state.Group[msg.InferenceId%uint64(len(sm.state.Group))].SlotID
+
+// Reserve cost: (input_length + max_tokens) * token_price
+reservedCost, err := tokenCost(msg.InputLength, msg.MaxTokens, sm.state.Config.TokenPrice)
+if err != nil {
+	return err
+}
+if sm.state.Balance < reservedCost {
+	return types.ErrInsufficientBalance
+}
+sm.state.Balance -= reservedCost
+```
+
 ## Учётный цикл
 ```
 1. MsgCreateDevshardEscrow → лочит amount, пинит группу из 16 хост-слотов

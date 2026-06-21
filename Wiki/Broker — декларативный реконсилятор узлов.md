@@ -13,6 +13,42 @@ updated: 2026-06-20
 > реконсилятор сводит фактическое состояние к желаемому. Паттерн k8s-controller для
 > ML-узлов.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["Команды ставят намерение — сводит к нему единственный реконсилятор"]:::note
+    CMD["Команды<br/>StartPoc · InitValidate · InferenceUp"]:::entry
+    REC["Реконсилятор<br/>единственный мутатор"]:::core
+    STATE["NodeState<br/>Intended ≠ Current → действие"]:::coresub
+    WORKER["Воркеры<br/>без общего состояния"]:::adapter
+    NODE["GPU-узел<br/>INFERENCE · POC · STOPPED"]:::adapter
+    NOTE -.-> REC
+    CMD -->|"ставят intended"| STATE
+    STATE -->|"расхождение"| REC
+    REC -->|"запуск задачи"| WORKER
+    WORKER -->|"результат сообщением"| REC
+    REC -->|"приводит к фазе"| NODE
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`decentralized-api/broker/broker.go:206`)
+```go
+type NodeState struct {
+	IntendedStatus     types.HardwareNodeStatus `json:"intended_status"`
+	CurrentStatus      types.HardwareNodeStatus `json:"current_status"`
+	ReconcileInfo      *ReconcileInfo           `json:"reconcile_info,omitempty"`
+	cancelInFlightTask func()
+
+	PocIntendedStatus PocStatus `json:"poc_intended_status"`
+	PocCurrentStatus  PocStatus `json:"poc_current_status"`
+	// ...
+}
+```
+
 ## Intended vs Current
 У каждого узла две пары статусов:
 ```

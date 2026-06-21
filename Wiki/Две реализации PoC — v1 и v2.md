@@ -13,6 +13,40 @@ updated: 2026-06-20
 > который пакет `api` лишь проксирует. Это легко упустить: математику учить по v1, а в
 > бою работает v2.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["Математику учи по v1 (pow), а on-chain работает v2 внутри форка vLLM"]:::note
+    V1["PoC v1 — пакет pow<br/>nano-Llama, vocab=8192"]:::coresub
+    V2["PoC v2 — форк vLLM<br/>реальная LLM, k_dim=12"]:::core
+    API["Пакет api<br/>лишь проксирует v2"]:::adapter
+    TEST["Биномиальный тест<br/>общий для обоих"]:::entry
+    V1 -->|"референс"| TEST
+    V2 -->|"живой путь"| TEST
+    API -->|"/inference/pow/*"| V2
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`mlnode/packages/api/src/api/inference/pow_v2_routes.py:52`)
+```python
+class StatTestModel(BaseModel):
+    dist_threshold: float = 0.02
+    p_mismatch: float = 0.001
+    fraud_threshold: float = 0.01
+
+# ...
+
+class PoCParamsModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model: str
+    seq_len: int
+    k_dim: int = 12
+```
+
 ## Сравнение
 | | **PoC v1 (`pow`)** | **PoC v2 (форк vLLM + `api`)** |
 |---|---|---|

@@ -13,6 +13,41 @@ updated: 2026-06-20
 > нонса нормируется на сферу и сравнивается по евклидову расстоянию с target-вектором,
 > выведенным из хеша блока. Сложность — непрерывный радиус, а не число нулей.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["«Работа» PoC — это L2-расстояние на единичной сфере, а не нули хеша"]:::note
+    SEED["Сид<br/>block_hash + public_key + nonce"]:::entry
+    FWD["Форвард-пасс<br/>детерминированная модель из хеша"]:::coresub
+    DIST["Расстояние на сфере<br/>‖normalize(perm(out)) − target‖₂"]:::core
+    WIN["Победа нонса<br/>dist &lt; r_target"]:::adapter
+    SEED -->|"эмбеддинг (1,seq,dim)"| FWD
+    FWD -->|"логиты последней позиции"| DIST
+    DIST -->|"порог сложности"| WIN
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`mlnode/packages/pow/src/pow/compute/compute.py:172`)
+```python
+with self.stats.time_stats.time_process():
+    outputs = outputs / np.linalg.norm(outputs, axis=1, keepdims=True)
+    distances = np.linalg.norm(
+        outputs - target,
+        axis=1
+    )
+    batch = ProofBatch(
+        public_key=public_key,
+        block_hash=self.block_hash,
+        # ...
+        dist=distances,
+        node_id=self.node_id,
+    )
+```
+
 ## Алгоритм (на один нонс)
 ```
 1. нонс → сид f"{block_hash}_{public_key}_nonce{nonce}" → входной эмбеддинг (1,seq,dim) fp16

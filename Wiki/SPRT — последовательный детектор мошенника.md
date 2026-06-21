@@ -13,6 +13,53 @@ updated: 2026-06-20
 > «честный / мошенник» по потоку исходов принимает **последовательный критерий
 > Вальда (SPRT)** — с контролируемыми ошибками и минимумом наблюдений.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["последовательный критерий Вальда: решение по потоку исходов<br/>контролируемые ошибки, минимум наблюдений"]:::note
+    OBS["Исходы проверок<br/>failures / passes"]:::adapter
+    LLR["LLR<br/>копит log-likelihood ratio"]:::core
+    DEC["Decision<br/>пороги ±H"]:::coresub
+    INV["INVALID<br/>LLR ≥ +H"]:::entry
+    PASS["оправдан<br/>LLR ≤ −H"]:::entry
+    NOTE -.-> OBS
+    OBS -->|"UpdateCounts"| LLR
+    LLR -->|"сравнение"| DEC
+    DEC -->|"нарушитель"| INV
+    DEC -->|"чист"| PASS
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`inference-chain/x/inference/calculations/sprt.go:25`)
+```go
+// UpdateCounts applies a batch: `failures` and `passes` since last call.
+// LLR += failures*logFail + passes*logPass
+func (s SPRT) UpdateCounts(failures, passes int64) SPRT {
+    if failures != 0 {
+        s.LLR = s.LLR.Add(s.logFail.Mul(decimal.NewFromInt(failures)))
+    }
+    if passes != 0 {
+        s.LLR = s.LLR.Add(s.logPass.Mul(decimal.NewFromInt(passes)))
+    }
+    return s
+}
+
+// Decision uses symmetric thresholds ±H
+func (s SPRT) Decision() Decision {
+    if s.LLR.GreaterThanOrEqual(s.H) {
+        return Fail // favor H1 (reject H0)
+    }
+    if s.LLR.LessThanOrEqual(s.H.Neg()) {
+        return Pass // favor H0
+    }
+    return Undetermined
+}
+```
+
 ## Как работает (`calculations/sprt.go`)
 Копится log-likelihood ratio:
 ```

@@ -13,6 +13,43 @@ updated: 2026-06-20
 > сам узнаёт diff'ы от пиров, проверяет авторизацию юзера, подписывает и распространяет
 > подпись — оставаясь годным для кворума 2/3+1.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["Обойдённый хост сам узнаёт diff'ы от пиров и остаётся годным для кворума"]:::note
+    USER["Пользователь-секвенсор<br/>мог бы обойти хост"]:::entry
+    REC["Recovery-цикл ~60с<br/>ядро живучести"]:::core
+    G1["Gate 1: я отстал?<br/>highestSeen > lastApplied"]:::coresub
+    G2["Gate 2: меня обходят?<br/>тишина юзера 60с"]:::coresub
+    PEERS["Пиры группы<br/>fetch · verify · gossip K=10"]:::adapter
+    NOTE -.-> REC
+    USER -.->|"молчит со мной"| G2
+    REC --> G1
+    REC --> G2
+    G1 -->|"оба да"| PEERS
+    G2 -->|"оба да"| PEERS
+    PEERS -->|"со-подпись в кворум"| REC
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`devshard/gossip/gossip.go:318`)
+```go
+if highestSeen <= lastAppliedNonce {
+	return
+}
+
+// Only trigger recovery if we haven't received a user request recently.
+if !lastReq.IsZero() && time.Since(lastReq) < recoveryDelay {
+	return
+}
+// ...
+diffs, err := fetcher.GetDiffs(ctx, lastAppliedNonce+1, highestSeen)
+```
+
 ## Два канала
 - **nonce-gossip** → `K=10` случайным пирам: `{Nonce, StateHash, StateSig, SlotID}`.
 - **tx-broadcast** → всем (с дедупом): «устаревшие tx редки и критичны».

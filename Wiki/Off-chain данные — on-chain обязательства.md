@@ -13,6 +13,45 @@ updated: 2026-06-20
 > корни MMR, счётчики), а тяжёлые данные живут off-chain с прунингом, оставаясь
 > верифицируемыми по корню. Принцип «доверяй, но проверяй по корню».
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["В цепь — только обязательства (хеши, MMR-корень, счётчики); тяжёлые данные off-chain, верифицируемы по корню"]:::note
+    DATA["Тяжёлые данные<br/>промпты, ответы, артефакты"]:::entry
+    MMR["MMR-аккумулятор<br/>append-only, дом. разделение"]:::core
+    COMMIT["On-chain commit<br/>count + 32-байт корень"]:::coresub
+    STORE["Off-chain store<br/>партиции по эпохе"]:::adapter
+    VERIFY["Валидатор<br/>пересчёт хешей"]:::coresub
+    DATA -->|"hashLeaf / hashNode"| MMR
+    MMR -->|"GetRootAt"| COMMIT
+    DATA --> STORE
+    STORE -->|"pull payload"| VERIFY
+    COMMIT -->|"сравнить корень"| VERIFY
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`decentralized-api/poc/artifacts/mmr.go:14`)
+```go
+func hashLeaf(data []byte) []byte {
+    h := sha256.New()
+    h.Write([]byte{leafPrefix}) // 0x00 domain separation
+    h.Write(data)
+    return h.Sum(nil)
+}
+
+func hashNode(left, right []byte) []byte {
+    h := sha256.New()
+    h.Write([]byte{internalPrefix}) // 0x01 domain separation
+    h.Write(left)
+    h.Write(right)
+    return h.Sum(nil)
+}
+```
+
 ## Что где живёт
 | Данные | On-chain | Off-chain |
 |---|---|---|

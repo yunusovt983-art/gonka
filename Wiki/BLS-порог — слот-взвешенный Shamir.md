@@ -14,6 +14,41 @@ updated: 2026-06-20
 > подписание. Хитрость — **слот-взвешивание** сворачивает «взвешенный порог» в простой
 > счётный.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["Вес дискретизируется в равные слоты — взвешенный порог сводится к счётному t-of-n"]:::note
+    WEIGHT["PoC-вес<br/>валидаторов"]:::entry
+    SLOTS["I слот-долей<br/>диапазон ∝ весу"]:::coresub
+    DKG["Slot-weighted DKG<br/>общий BLS-ключ"]:::core
+    GATE["Гейт фазы<br/>slots > I/2"]:::coresub
+    BRIDGE["EVM-мост<br/>threshold-подпись"]:::adapter
+    WEIGHT -->|"AssignSlots"| SLOTS
+    SLOTS --> DKG
+    DKG -->|"каждый переход"| GATE
+    DKG -->|"t = I − offset"| BRIDGE
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`inference-chain/x/bls/keeper/phase_transitions.go:79`)
+```go
+// Check if we have sufficient participation (more than half the slots)
+if slotsWithDealerParts > epochBLSData.ITotalSlots/2 {
+    // Sufficient participation - transition to VERIFYING
+    params, err := k.GetParams(ctx)
+    // ...
+    currentBlockHeight := ctx.BlockHeight()
+
+    epochBLSData.DkgPhase = types.DKGPhase_DKG_PHASE_VERIFYING
+    epochBLSData.VerifyingPhaseDeadlineBlock = currentBlockHeight + params.VerificationPhaseDurationBlocks
+    // ...
+}
+```
+
 ## Слот-взвешенный VSS (главная идея)
 Секрет шарится не «по валидаторам», а на `I` равных **слот-долей** (живой genesis:
 `i_total_slots = 100`, offset `50`; в коде есть комментарий «прод 1000», но это

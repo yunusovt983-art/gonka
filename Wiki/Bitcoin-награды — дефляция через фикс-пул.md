@@ -13,6 +13,41 @@ updated: 2026-06-20
 > его по доле PoC-веса. Больше GPU ⇒ тот же пул на больше участников ⇒ дефицит
 > вместо инфляции. Это «биткоин»-логика: фиксированный график, мягкий потолок.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["Пул эмиссии фиксирован и убывает по экспоненте — больше GPU ⇒ дефицит, не инфляция"]:::note
+    POOL["FixedEpochReward<br/>Initial × exp(decay·epoch)"]:::core
+    INIT["InitialEpochReward<br/>≈323K gonka"]:::entry
+    SHARE["RewardCoin[i]<br/>доля PoC-веса"]:::coresub
+    GOV["gov-аккаунт<br/>остаток и потери"]:::adapter
+    INIT -->|"genesis"| POOL
+    POOL -->|"× вес / totalFullWeight"| SHARE
+    POOL -->|"нет перераспределения"| GOV
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`inference-chain/x/inference/keeper/bitcoin_rewards.go:131`)
+```go
+func CalculateFixedEpochReward(epochsSinceGenesis uint64, initialReward uint64, decayRate *types.Decimal) (uint64, error) {
+    // ...
+    initialRewardDecimal := decimal.NewFromUint64(initialReward)
+    // Calculate decay exponent: decay_rate × epochs_elapsed
+    decayRateDecimal := decayRate.ToDecimal()
+    exponent, err := types.GetExponent(decayRateDecimal)
+    // ...
+    // Actual decay is exp(decay_rate)^epochsSinceGenesis
+    expValue, err := exponent.PowInt32(int32(epochsSinceGenesis))
+    // ...
+    currentReward := initialRewardDecimal.Mul(expValue)
+    return uint64(currentReward.IntPart()), nil
+}
+```
+
 ## Две монеты
 | Монета | Источник | Распределение |
 |---|---|---|

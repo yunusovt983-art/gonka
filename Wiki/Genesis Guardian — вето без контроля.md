@@ -14,6 +14,42 @@ updated: 2026-06-20
 > <2/3** (не контроль). При зрелости усиление **само выключается** — без постоянной
 > централизации.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["Усиление даёт guardian'ам вето (>1/3), но не контроль (<1/2) — и само гаснет при зрелости"]:::note
+    OTHER["otherTotal<br/>не-guardian power"]:::entry
+    MULT["множитель m<br/>доля m/(1+m)"]:::coresub
+    POWER["guardian.Power<br/>(otherTotal·m)/N"]:::core
+    GATE["Гейт зрелости<br/>power≥thr && height≥min"]:::coresub
+    OFF["Усиление выкл.<br/>навсегда"]:::adapter
+    OTHER -->|"× m / N"| POWER
+    MULT --> POWER
+    POWER -->|"каждый переход"| GATE
+    GATE -->|"при зрелости"| OFF
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`inference-chain/x/inference/module/genesis_guardian_enhancement.go:142`)
+```go
+// Calculate other participants' total power (excluding all guardians)
+otherParticipantsTotal := totalNetworkPower - totalGuardianPower
+
+// total_enhancement = other_participants_total * genesis_guardian_multiplier
+multiplierDecimal := genesisGuardianMultiplier.ToDecimal()
+otherParticipantsTotalDecimal := decimal.NewFromInt(otherParticipantsTotal)
+totalEnhancementDecimal := otherParticipantsTotalDecimal.Mul(multiplierDecimal)
+
+// per-guardian enhancement: total_enhancement / number_of_guardians
+guardianCount := len(guardianIndices)
+perGuardianEnhancementDecimal := totalEnhancementDecimal.Div(decimal.NewFromInt(int64(guardianCount)))
+perGuardianEnhancement := perGuardianEnhancementDecimal.IntPart()
+```
+
 ## Математика (выбор множителя `m`)
 ```
 otherTotal = totalNetworkPower − totalGuardianPower          # только не-guardian power

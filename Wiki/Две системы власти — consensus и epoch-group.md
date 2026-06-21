@@ -13,6 +13,38 @@ updated: 2026-06-20
 > **EpochGroup power** управляет внутренними операциями сети (валидация PoC,
 > распределение работы). Они синхронизируются в конкретных точках цикла эпохи.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["два разных числа власти: стабильный консенсус vs гибкое распределение<br/>синхронизация — в конце эпохи"]:::note
+    EG["EpochGroup Power<br/>x/group, в течение эпохи"]:::core
+    POC["Результаты PoC<br/>веса валидации"]:::coresub
+    SYNC["SetComputeValidators<br/>конец эпохи"]:::adapter
+    CP["Consensus Power<br/>staking (форк)"]:::coresub
+    CMT["CometBFT + x/gov<br/>блоки, голосование, slash"]:::entry
+    NOTE -.-> EG
+    POC -->|"копит вес"| EG
+    EG -->|"на границе эпохи"| SYNC
+    SYNC -->|"переносит власть"| CP
+    CP -->|"задаёт"| CMT
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`inference-chain/x/inference/epochgroup/epoch_group.go:414`)
+```go
+// epoch-group вес члена → consensus Power (никакого бондинга токенов)
+computeResults = append(computeResults, keeper.ComputeResult{
+    Power:           getWeight(member),
+    ValidatorPubKey: &pubKey,
+    OperatorAddress: valOperatorAddr,
+})
+// ... затем в module.go: Staking.SetComputeValidators(ctx, finalComputeResult, ...)
+```
+
 ## Сравнение
 | | **Consensus Power** | **EpochGroup Power** |
 |---|---|---|

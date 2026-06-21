@@ -13,6 +13,36 @@ updated: 2026-06-20
 > **воздержавшимся** (против принятия по >2/3). Делегирование передаёт его consensus-вес
 > прямому члену, чтобы модель добрала кворум.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["N→1, single-hop, без циклов; делегировать самому себе нельзя (ErrSelfDelegation)"]:::note
+    DELEGATOR["Делегатор<br/>держатель веса, не гоняет модель"]:::entry
+    MSG["SetPoCDelegation<br/>model_id, delegate_to"]:::coresub
+    GUARD["ValidateBasic<br/>sender ≠ delegate_to"]:::core
+    TARGET["Прямой член модели<br/>vp += вес делегатора"]:::adapter
+    DELEGATOR -->|"передать вес"| MSG
+    MSG -->|"проверка"| GUARD
+    GUARD -->|"резолв N→1"| TARGET
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`inference-chain/x/inference/types/message_poc_delegation.go:22`)
+```go
+if msg.DelegateTo != "" {
+    if _, err := sdk.AccAddressFromBech32(msg.DelegateTo); err != nil {
+        return errorsmod.Wrapf(sdkerrors.ErrInvalidAddress, "invalid delegate_to address (%s)", err)
+    }
+    if msg.Sender == msg.DelegateTo {
+        return errorsmod.Wrap(ErrSelfDelegation, "sender cannot delegate to self")
+    }
+}
+```
+
 ## Три взаимоисключающих сообщения (last-write-wins)
 На `(model_id, participant)` в любой момент максимум одно из:
 | Msg | Кто | Смысл |

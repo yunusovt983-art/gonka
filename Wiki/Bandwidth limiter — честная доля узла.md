@@ -13,6 +13,41 @@ updated: 2026-06-20
 > справедливую долю, и сумма локальных капов ≈ общему капу. Скользящее среднее, не
 > token-bucket.
 
+## 🗺️ Обзор
+```mermaid
+flowchart TB
+    NOTE["Общесетевой лимит / число участников = честная доля каждого узла"]:::note
+    CHAIN["Общесетевой кап<br/>EstimatedLimitsPerBlockKb"]:::entry
+    LIM["Лимитер узла<br/>скользящее окно"]:::core
+    SHARE["Деление на участников<br/>cap / participantCount"]:::coresub
+    REQ["Входящий запрос<br/>TA-путь"]:::adapter
+    REJ["HTTP 429<br/>try another TA"]:::adapter
+    NOTE -.-> LIM
+    CHAIN -->|"делим на смене эпохи"| SHARE
+    SHARE -->|"локальный кап"| LIM
+    REQ -->|"avgUsage + est"| LIM
+    LIM -->|"превышение"| REJ
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+## 💻 Код (`decentralized-api/internal/bandwidth_limiter.go:202`)
+```go
+participantCount := uint64(len(epochGroupData.ValidationWeights))
+if participantCount == 0 {
+	return bl.defaultLimit, bl.defaultInferenceLimit
+}
+
+kbLimit := bl.defaultLimit / participantCount
+inferenceLimit := bl.defaultInferenceLimit / participantCount
+if inferenceLimit == 0 && bl.defaultInferenceLimit > 0 {
+	inferenceLimit = 1 // Minimum of 1 inference per block per node
+}
+```
+
 ## ⚠️ Два РАЗНЫХ механизма под одним proto-struct
 `BandwidthLimitsParams` обслуживает сразу:
 1. **dapi-локальный лимитер** (эта заметка) — допуск входящих запросов на TA-пути.
