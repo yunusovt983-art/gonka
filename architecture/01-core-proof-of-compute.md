@@ -11,6 +11,31 @@
 
 ---
 
+### Один часовой дирижирует исполнителями
+
+```mermaid
+flowchart TB
+    EB["EndBlock · x/inference<br/>стейт-машина эпох — единственный часовой"]:::core
+    subgraph SATS["исполнители — вызываются на границе эпохи"]
+      direction LR
+      C["x/collateral<br/>AdvanceEpoch · Slash"]:::adapter
+      B["x/bls<br/>InitKeyGen · RequestSig"]:::adapter
+      V["x/streamvesting<br/>AdvanceEpoch"]:::adapter
+      S["x/staking (форк)<br/>SetComputeValidators"]:::adapter
+    end
+    EB -->|"явный вызов кейпера"| C
+    EB -->|"явный вызов"| B
+    EB -->|"явный вызов"| V
+    EB -->|"compute → power"| S
+    C -.->|"сбой соседа → epoch_error (не валит цепь)"| EB
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+```
+
+> Глушатся только ошибки **соседей**; сбой ядра эпохи всё же валит цепь (см. §2).
+
+---
+
 ## 1. Главные часы — модель эпохи
 
 Вся цепь крутится вокруг одного якоря — `PocStartBlockHeight` эпохи. **`EpochContext`** (`types/epoch_context.go`) превращает относительные смещения из `EpochParams` в абсолютные высоты блоков для каждой стадии. Поддерживаются три указателя (`types/epoch.md`):

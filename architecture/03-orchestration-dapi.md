@@ -9,6 +9,27 @@ dapi — per-participant **off-chain оркестратор** между Cosmos-
 
 ---
 
+### Слои dapi
+
+> Внешние команды лишь ставят **намерение**; единственный реконсилятор (broker) сводит состояние узлов к нему.
+
+```mermaid
+flowchart TB
+    NOTE["dapi: команды ставят НАМЕРЕНИЕ · реконсилятор сводит current → intended"]:::note
+    IN["вход<br/>public HTTP API · event_listener (события цепи)"]:::entry
+    ORCH["оркестрация — ЯДРО<br/>broker (реконсилятор) · chainphase · PoC-конвейер"]:::core
+    ADAPT["адаптеры<br/>mlnodeclient · cosmosclient/tx_manager · payload/stats storage"]:::adapter
+    IN --> ORCH
+    ORCH -->|"команды узлам"| ADAPT
+    ADAPT -.->|"Cosmos tx · артефакты · события"| ORCH
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+---
+
 ## 1. Отслеживание эпох/фаз и реакция на стадии PoC
 
 - **`chainphase/phase_tracker.go`** — `ChainPhaseTracker`, потокобезопасный (`sync.RWMutex`) кэш *последней* эпохи, параметров, текущего блока, статуса синка. Хитрость: хранит сырые входы и **выводит** `CurrentPhase` на чтении через `types.NewEpochContext(...).GetCurrentPhase(height)` — каждый `GetCurrentEpochState()` возвращает согласованный снимок, вычисленный от высоты.

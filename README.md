@@ -18,6 +18,6 @@
 
 ---
 
-*Аналитическая документация; исходный код gonka — в [оригинальном репозитории](https://github.com/gonka-ai/gonka).*
+## Лицензия
 
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
+[AGPL-3.0](LICENSE) — в соответствии с лицензией исходного проекта gonka.

@@ -47,6 +47,49 @@ Gonka — децентрализованная инфраструктура дл
 
 ---
 
+### Слои и направление зависимостей
+
+> Правило: **off-chain слой — conformist к цепи** (тянет `Params` каждый блок); внутри цепи **ядро `x/inference` дирижирует** доменными модулями.
+
+```mermaid
+flowchart TB
+    NOTE["Правило зависимостей: off-chain → цепь (conformist) · ядро дирижирует доменами"]:::note
+
+    USERS["Клиенты<br/>User · Developer — OpenAI HTTP"]:::entry
+
+    subgraph OFF["off-chain — адаптеры"]
+      direction LR
+      DAPI["decentralized-api<br/>broker · фазы · PoC-конвейер"]:::adapter
+      DSHARD["devshard<br/>эскроу-канал инференса"]:::adapter
+      MLN["ml node<br/>vLLM · PoC compute"]:::adapter
+      RLY["релеер<br/>geth + prysm (мост)"]:::adapter
+    end
+
+    subgraph CHAINBOX["inference-chain — форк Cosmos SDK"]
+      direction TB
+      CORE["x/inference — ЯДРО<br/>эпохи · PoC · settlement · pricing"]:::core
+      SAT["спутники: collateral · bls · streamvesting<br/>restrictions · genesistransfer · bookkeeper"]:::coresub
+      STK["x/staking (форк) → CometBFT<br/>SetComputeValidators"]:::adapter
+    end
+
+    USERS -->|"chat/completions"| DAPI
+    USERS -.->|"стрим"| DSHARD
+    DAPI -->|"conformist + ACL · Params/блок"| CORE
+    DSHARD -->|"MsgSettleDevshardEscrow"| CORE
+    DAPI --> MLN
+    RLY -->|"MsgBridgeExchange"| CORE
+    CORE -->|"дирижирует: AdvanceEpoch · Slash · RequestSig"| SAT
+    CORE -->|"compute → power"| STK
+
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+---
+
 ## 2. Стратегический дизайн: классификация поддоменов
 
 DDD требует прежде всего отделить **то, что даёт конкурентное преимущество** (Core), от служебного (Supporting) и от заменяемого готовыми решениями (Generic).

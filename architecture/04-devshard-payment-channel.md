@@ -15,6 +15,30 @@
 
 ---
 
+### Слои devshard
+
+> Пользователь — секвенсор; хосты co-sign state root; цепь трогается лишь дважды (open / settle).
+
+```mermaid
+flowchart TB
+    NOTE["devshard: вся бухгалтерия off-chain · цепь = якорь (open + settle 2/3+1)"]:::note
+    GW["Gateway<br/>выбор эскроу · admission · карантин хостов"]:::entry
+    PX["Proxy (спекулятивный)<br/>прогрессивный fanout по нонсам/хостам"]:::adapter
+    SESS["user.Session — ЯДРО<br/>нонс · diff (user-sig) · протокол таймаутов"]:::core
+    TR["transport (signed HTTP)<br/>gossip + recovery между хостами"]:::adapter
+    CH["цепь<br/>MsgCreate / MsgSettleDevshardEscrow"]:::coresub
+    GW --> PX --> SESS --> TR
+    SESS -->|"open / settle (кворум 2/3+1)"| CH
+    TR -.->|"co-sign state root · живучесть при обходе"| SESS
+    classDef entry fill:#0f172a,stroke:#334155,color:#e2e8f0
+    classDef core fill:#2e7d46,stroke:#86efac,color:#ffffff
+    classDef coresub fill:#3a8d56,stroke:#bbf7d0,color:#ffffff
+    classDef adapter fill:#1e293b,stroke:#475569,color:#e2e8f0
+    classDef note fill:none,stroke:none,color:#94a3b8
+```
+
+---
+
 ## 1. Модель эскроу + расчёта (центральная идея)
 
 ### Учётный цикл
