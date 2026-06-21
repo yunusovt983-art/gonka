@@ -20,4 +20,4 @@
 
 ## Лицензия
 
-[AGPL-3.0](LICENSE) — в соответствии с лицензией исходного проекта gonka.
+[Gonka License](LICENSE.md) — как у исходного проекта gonka: модифицированная Apache 2.0 с ограничением на форк (© Product Science, Inc.).
