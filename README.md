@@ -1,6 +1,6 @@
 # Gonka — архитектурный «второй мозг»
 
-Разбор архитектуры [gonka](https://github.com/gonka-ai/gonka) (децентрализованная AI-инфраструктура, **Proof of Compute 2.0**) по принципам DDD + атомарные заметки в стиле «второго мозга» (distill-from-first-principles).
+Архитектурный анализ проекта [gonka](https://github.com/gonka-ai/gonka) (децентрализованная AI-инфраструктура, **Proof of Compute 2.0**) по принципам DDD + атомарные заметки в стиле «второго мозга» (distill-from-first-principles).
 
 > Слой исходников: `8a35022` · тег `v0.2.13-devshard-v2` · 2026-06-19.
 
