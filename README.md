@@ -6,6 +6,7 @@
 
 ## Навигация
 
+- **[🖼️ Галерея диаграмм](architecture/README.md)** — навигатор по всем визуализациям проекта.
 - **[🚁 Helicopter View](architecture/helicopter-view.md)** — вид с высоты птичьего полёта (ANSI): вся система на одном экране в философии DDD.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — точка входа: стратегический DDD (Context Map, классификация поддоменов, Ubiquitous Language).
 - **[architecture/00-system-map.md](architecture/00-system-map.md)** — 🗺️ единая мастер-диаграмма всех компонентов и потоков.
