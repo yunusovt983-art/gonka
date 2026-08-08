@@ -1,0 +1,661 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gonka — власть, которую считают на GPU</title>
+<meta name="description" content="[Gonka] architecture research. Разбор gonka-ai/gonka (Proof of Compute 2.0) в терминах DDD: HLD в ANSI (восемь панно), классификация поддоменов, путь запроса, devshard-эскроу, EVM-мост, верификация доков против кода.">
+<meta property="og:title" content="Gonka — власть, которую считают на GPU">
+<meta property="og:description" content="Децентрализованный AI-инференс на форке Cosmos SDK, где voting power = PoC score, а не токены. Восемь ANSI-панно, DDD-карта контекстов и состязательная сверка документации с исходниками.">
+<meta property="og:type" content="article">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%230E1319'/><rect x='2' y='9' width='3' height='5' fill='%23E08B50'/><rect x='6.5' y='6' width='3' height='8' fill='%23E08B50'/><rect x='11' y='2' width='3' height='12' fill='%237BAEDF'/></svg>">
+</head>
+<body>
+<style>
+  :root {
+    --paper:      #EEF1F5;
+    --surface:    #FAFBFC;
+    --plate:      #E2E7EE;
+    --ink:        #16202B;
+    --ink-2:      #4E5D6E;
+    --ink-3:      #75838F;
+    --line:       #CDD6E0;
+    --rule:       #A9B5C2;
+    --accent:     #A5471A;
+    --accent-2:   #2C5F92;
+    --ok:         #3F6B51;
+    --warn:       #9A6B14;
+    --console-bg: #0E1319;
+    --console-ink:#C9D3DD;
+    --console-dim:#8290A0;
+    --nav-bg:     rgba(238, 241, 245, .9);
+
+    --f-display: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    --f-body:    ui-serif, Charter, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --f-ui:      ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --measure: 66ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0C1116; --surface: #131A21; --plate: #171F27;
+      --ink: #D3DBE3; --ink-2: #93A2B2; --ink-3: #75838F;
+      --line: #232D37; --rule: #38434F;
+      --accent: #E08B50; --accent-2: #7BAEDF; --ok: #85B295; --warn: #D3A44E;
+      --console-bg: #070B0F; --nav-bg: rgba(12, 17, 22, .9);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--f-body); font-size: 17px; line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  code {
+    font-family: var(--f-display); font-size: .84em;
+    background: var(--plate); padding: .05em .32em; border-radius: 3px;
+  }
+
+  /* ── навигация ─────────────────────────────────────── */
+  .topbar {
+    position: sticky; top: 0; z-index: 5;
+    background: var(--nav-bg); backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+  }
+  .topbar .inner {
+    max-width: 74rem; margin: 0 auto; padding: .55rem 1.4rem;
+    display: flex; gap: 1.2rem; align-items: baseline; flex-wrap: wrap;
+    font-family: var(--f-display); font-size: .74rem;
+  }
+  .topbar .home { color: var(--ink-2); text-decoration: none; }
+  .topbar .home:hover { color: var(--accent); }
+  .topbar nav { display: flex; gap: 1rem; flex-wrap: wrap; }
+  .topbar nav a { color: var(--ink-2); text-decoration: none; }
+  .topbar nav a:hover { color: var(--accent); }
+
+  .wrap { max-width: 74rem; margin: 0 auto; padding: 3rem 1.4rem 5rem; }
+
+  /* ── шапка ─────────────────────────────────────────── */
+  .masthead { border-bottom: 2px solid var(--ink); padding-bottom: 1.6rem; }
+  .eyebrow {
+    display: flex; gap: .9rem; flex-wrap: wrap; align-items: baseline;
+    font-family: var(--f-display); font-size: .72rem; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--ink-3); margin-bottom: 1rem;
+  }
+  .eyebrow b { color: var(--accent); font-weight: 700; }
+  h1 {
+    font-family: var(--f-ui); font-weight: 700; letter-spacing: -.02em;
+    font-size: clamp(1.9rem, 4.6vw, 3rem); line-height: 1.06; margin: 0 0 .9rem;
+    text-wrap: balance;
+  }
+  h1 span { color: var(--accent); }
+  .standfirst { max-width: var(--measure); font-size: 1.06rem; margin: 0; }
+  dl.figures {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+    gap: 1px; margin: 1.8rem 0 0; padding: 0;
+    background: var(--line); border: 1px solid var(--line);
+  }
+  dl.figures > div { background: var(--surface); padding: .8rem .9rem; }
+  dl.figures dt {
+    font-family: var(--f-display); font-size: 1.3rem; font-weight: 700;
+    color: var(--accent); font-variant-numeric: tabular-nums;
+  }
+  dl.figures dd {
+    margin: .15rem 0 0; font-family: var(--f-ui); font-size: .78rem; color: var(--ink-2);
+  }
+
+  /* ── секции ────────────────────────────────────────── */
+  section { margin-top: 3.4rem; scroll-margin-top: 3.5rem; }
+  section > .lbl {
+    font-family: var(--f-display); font-size: .72rem; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  h2 {
+    font-family: var(--f-ui); font-weight: 700; font-size: clamp(1.25rem, 2.6vw, 1.6rem);
+    line-height: 1.15; margin: .3rem 0 .8rem; text-wrap: balance;
+  }
+  h3 { font-family: var(--f-ui); font-size: 1.02rem; margin: 1.8rem 0 .4rem; }
+  section p { max-width: var(--measure); }
+
+  /* ── ANSI-консоль ──────────────────────────────────── */
+  .panel { margin-top: 1.4rem; border: 1px solid var(--rule); background: var(--console-bg); }
+  .panel-bar {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 1rem;
+    flex-wrap: wrap; padding: .5rem .9rem; border-bottom: 1px solid #232C36;
+    font-family: var(--f-display); font-size: .68rem; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--console-dim);
+  }
+  .panel-bar b { color: #E08B50; font-weight: 700; }
+  .panel-scroll { overflow-x: auto; }
+  pre.console {
+    margin: 0; padding: 1rem 1.1rem 1.2rem; white-space: pre;
+    font-family: var(--f-display); font-size: .74rem; line-height: 1.25;
+    color: var(--console-ink); font-variant-ligatures: none;
+  }
+  pre.console .k1 { color: #E08B50; font-weight: 700; }
+  pre.console .k2 { color: #7BAEDF; font-weight: 700; }
+  pre.console .k3 { color: #6D7C8C; }
+  figcaption {
+    font-size: .9rem; color: var(--ink-2); max-width: var(--measure); margin-top: .7rem;
+  }
+  figure { margin: 0; }
+  .key {
+    display: flex; flex-wrap: wrap; gap: 1.1rem; margin-top: 1rem;
+    font-family: var(--f-display); font-size: .72rem; color: var(--ink-3);
+  }
+  .key i { font-style: normal; font-weight: 700; }
+  .key .c1 { color: var(--accent); }
+  .key .c2 { color: var(--accent-2); }
+  @media (max-width: 46rem) { pre.console { font-size: .58rem; line-height: 1.22; } }
+
+  /* ── таблицы ───────────────────────────────────────── */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); margin-top: 1.2rem; }
+  table { border-collapse: collapse; width: 100%; min-width: 42rem; font-size: .92rem; }
+  thead th {
+    text-align: left; font-family: var(--f-display); font-size: .68rem;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3);
+    background: var(--plate); padding: .6rem .8rem; border-bottom: 1px solid var(--line);
+    font-weight: 600;
+  }
+  tbody td { padding: .6rem .8rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.mono { font-family: var(--f-display); font-size: .82rem; white-space: nowrap; }
+  .v { font-family: var(--f-display); font-size: .72rem; font-weight: 700; white-space: nowrap; }
+  .v-core { color: var(--accent); }
+  .v-sup { color: var(--ok); }
+  .v-gen { color: var(--ink-3); }
+
+  /* ── принципы ──────────────────────────────────────── */
+  .dec { display: grid; grid-template-columns: 3.2rem 1fr; gap: 1rem;
+         padding: .85rem 0; border-bottom: 1px solid var(--line); }
+  .dec:first-of-type { border-top: 1px solid var(--line); }
+  .dec .id { font-family: var(--f-display); font-size: .82rem; font-weight: 700; color: var(--accent); }
+  .dec h4 { font-family: var(--f-ui); font-size: .95rem; margin: 0 0 .2rem; }
+  .dec p { margin: 0; font-size: .9rem; color: var(--ink-2); max-width: 62ch; }
+
+  /* ── врезка ────────────────────────────────────────── */
+  .pull {
+    margin-top: 1.4rem; padding: 1.2rem 1.3rem;
+    background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+  }
+  .pull .big {
+    font-family: var(--f-display); font-size: clamp(1.4rem, 4vw, 1.9rem); font-weight: 700;
+    color: var(--accent); font-variant-numeric: tabular-nums; line-height: 1.1;
+  }
+  .pull .big small { display: block; font-size: .8rem; color: var(--ink-3); font-weight: 400; margin-top: .25rem; }
+  .pull p { margin: .8rem 0 0; max-width: var(--measure); }
+
+  footer {
+    margin-top: 4rem; padding-top: 1.2rem; border-top: 1px solid var(--line);
+    font-family: var(--f-display); font-size: .74rem; color: var(--ink-3);
+    display: flex; flex-direction: column; gap: .35rem;
+  }
+  footer a { color: var(--accent-2); }
+</style>
+
+<div class="topbar">
+  <div class="inner">
+    <a class="home" href="https://yunusovt983-art.github.io/">← архитектурные атласы</a>
+    <nav>
+      <a href="#hld">HLD</a>
+      <a href="#ddd">Поддомены</a>
+      <a href="#clock">Эпоха</a>
+      <a href="#flows">Потоки</a>
+      <a href="#principles">Принципы</a>
+      <a href="#verify">Сверка</a>
+      <a href="#docs">Документы</a>
+    </nav>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">
+      <span>[Gonka] architecture research</span>
+      <b>gonka</b>
+      <span>8a35022 · v0.2.13-devshard-v2</span>
+      <span>слой 19 июня 2026</span>
+      <span>DDD + второй мозг</span>
+    </div>
+    <h1>Власть, которую <span>считают на GPU</span></h1>
+    <p class="standfirst">
+      <a href="https://github.com/gonka-ai/gonka">gonka-ai/gonka</a> — децентрализованная
+      инфраструктура AI-инференса на форке Cosmos SDK. Её центральная идея, <b>Proof of Compute 2.0</b>,
+      меняет то, откуда берётся право голоса: не из застейканных токенов, а из доказанной работы
+      GPU на трансформер-моделях. «Бесполезная» работа классического PoW заменена работой,
+      релевантной реальной нагрузке сети, — почти всё вычисление уходит на AI-задачи, а не на
+      охрану блокчейна. Этот атлас разбирает систему по DDD и сверяет каждое утверждение
+      с исходниками.
+    </p>
+    <dl class="figures">
+      <div><dt>7</dt><dd>доменных модулей on-chain</dd></div>
+      <div><dt>8</dt><dd>панно HLD в ANSI</dd></div>
+      <div><dt>14</dt><dd>документов архитектуры</dd></div>
+      <div><dt>31</dt><dd>атомарная заметка</dd></div>
+      <div><dt>13</dt><dd>апгрейдов в истории цепи</dd></div>
+      <div><dt>4</dt><dd>ошибки, найденные сверкой</dd></div>
+    </dl>
+  </header>
+
+  <section id="hld">
+    <div class="lbl">High-Level Design · ANSI</div>
+    <h2>Четыре плана: клиенты, адаптеры, цепь, мост</h2>
+    <p>
+      Система разрезана по границе цепи. Снаружи — три off-chain адаптера: <code>dapi</code>
+      оркеструет и держит фазы, <code>devshard</code> ведёт платёжный канал, <code>ml node</code>
+      считает на GPU. Внутри — одно доменное ядро <code>x/inference</code> и вокруг него
+      исполнители. Правило простое: всё, что снаружи, <em>conformist</em> к цепи — тянет её
+      параметры каждый блок и не диктует ядру ничего.
+    </p>
+    <figure class="panel">
+      <div class="panel-bar">
+        <span>панно 1 · <b>четыре плана</b></span>
+        <span>87 колонок</span>
+      </div>
+      <div class="panel-scroll"><pre class="console">                           Пользователь / Разработчик
+                                     │  OpenAI-совместимый HTTP
+                                     ▼
+  ┌──────────────────────────── OFF-CHAIN · адаптеры ────────────────────────────┐
+  │   ┌──────────────┐      ┌──────────────┐      ┌──────────────┐               │
+  │   │  dapi        │      │  devshard    │      │  ml node     │               │
+  │   │ оркестратор  │      │ платёж-канал │      │ vLLM · PoC   │               │
+  │   │ broker·фазы  │      │ эскроу 2/3+1 │      │ GPU compute  │               │
+  │   └──────┬───────┘      └──────┬───────┘      └──────┬───────┘               │
+  │  Cosmos  │ tx/events    settle │ state-root   команды│ артефакты             │
+  └──────────┼─────────────────────┼─────────────────────┘                       │
+             │                     │            conformist к цепи ───────────────┘
+             ▼                     ▼
+<span class="k2">  ╔══════════════════ INFERENCE-CHAIN (форк Cosmos SDK + CometBFT) ═══════════════╗</span>
+<span class="k2">  ║</span>   <span class="k1">┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓</span>     <span class="k2">║</span>
+<span class="k2">  ║</span>   <span class="k1">┃  ▓▓▓ CORE ▓▓▓   x/inference                                         ┃</span>     <span class="k2">║</span>
+<span class="k2">  ║</span>   <span class="k1">┃  эпохи · PoC 2.0 · settlement · pricing · делегирование · bridge    ┃</span>     <span class="k2">║</span>
+<span class="k2">  ║</span>   <span class="k1">┗━━━━━┯━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━━━━━━━━━━━━┛</span>     <span class="k2">║</span>
+<span class="k2">  ║</span>  дирижирует│ AdvanceEpoch·Slash·RequestSig             │ compute → power      <span class="k2">║</span>
+<span class="k2">  ║</span>            ▼                                           ▼                      <span class="k2">║</span>
+<span class="k2">  ║</span>   ┌──────────── SUPPORTING ───────────┐   ┌─────────── GENERIC ───────────┐   <span class="k2">║</span>
+<span class="k2">  ║</span>   │ collateral · bls · streamvesting  │   │ staking(fork) · group · gov   │   <span class="k2">║</span>
+<span class="k2">  ║</span>   │ restrictions · genesistransfer    │   │ bank · feegrant · CometBFT    │   <span class="k2">║</span>
+<span class="k2">  ║</span>   └───────────────────────────────────┘   └───────────────────────────────┘   <span class="k2">║</span>
+<span class="k2">  ╚═══════════════════════════════════════════┯═══════════════════════════════════╝</span>
+                                              │ BLS threshold signature
+                                              ▼
+                              <span class="k2">┌──────────────────────────────┐</span>
+                              <span class="k2">│   EVM BRIDGE  (WGNK token)   │</span>
+                              <span class="k2">└──────────────────────────────┘</span>
+
+  Легенда:  ┏━┓ ядро (компетентное преимущество) · ┌─┐ модули/адаптеры · ║═ граница цепи
+            ───►  поток/вызов · ▓▓▓ «горячая» GPU-работа</pre></div>
+    </figure>
+    <div class="key">
+      <span><i class="c1">▓▓▓ / ┏━┓</i> доменное ядро и «горячая» работа GPU</span>
+      <span><i class="c2">║ ═</i> граница цепи и выход в EVM</span>
+    </div>
+
+    <h3>Всё направлено внутрь</h3>
+    <p>
+      Ни один внешний слой не диктует ядру модель. Ядро дирижирует вниз — на границе эпохи
+      явно дёргает кейперы collateral, bls, streamvesting и staking.
+    </p>
+    <figure class="panel">
+      <div class="panel-bar">
+        <span>панно 2 · <b>правило зависимостей</b></span>
+        <span>73 колонки</span>
+      </div>
+      <div class="panel-scroll"><pre class="console">        CLIENTS ───────────────►┐
+                                │  conformist + ACL
+        dapi / devshard ───────►┤  (тянут Params каждый блок)
+        ml node ───────────────►┤
+        relayer (мост) ────────►┤
+                                ▼
+                        <span class="k1">┌───────────────┐</span>
+                        <span class="k1">│   x/inference │</span>◄── никакой внешний слой
+                        <span class="k1">│   ◀ ЯДРО ▶    │</span>     не диктует ядру;
+                        <span class="k1">└───────┬───────┘</span>     ядро дирижирует вниз
+                                │
+                ┌───────────────┼───────────────┐
+                ▼               ▼               ▼
+           collateral        bls         streamvesting   …  (исполнители)</pre></div>
+      <figcaption>
+        Отказоустойчивость распространяется только на соседей: ошибки спутниковых модулей
+        глушатся в событие <code>epoch_error</code>, но сбой самой стейт-машины эпохи возвращает
+        ошибку и валит цепь.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section id="ddd">
+    <div class="lbl">Стратегический DDD</div>
+    <h2>Что здесь ядро, а что взято готовым</h2>
+    <p>
+      DDD требует прежде всего отделить то, что даёт конкурентное преимущество, от служебного
+      и от заменяемого готовыми решениями. У gonka вся уникальность собрана в одном on-chain
+      модуле и двух off-chain сервисах; остальное — форк Cosmos SDK.
+    </p>
+    <figure class="panel">
+      <div class="panel-bar">
+        <span>панно 3 · <b>ось конкурентного преимущества</b></span>
+        <span>83 колонки</span>
+      </div>
+      <div class="panel-scroll"><pre class="console">   высокое  │  <span class="k1">┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓</span>
+конкурентное│  <span class="k1">┃           C O R E   (это и есть Gonka)        ┃</span>
+преимущество│  <span class="k1">┃  • Proof of Compute 2.0  (x/inference)        ┃</span>
+            │  <span class="k1">┃  • Off-chain оркестрация (dapi)               ┃</span>
+            │  <span class="k1">┃  • Devshard (растущее ядро монетизации)       ┃</span>
+<span class="k2">  ║</span>   <span class="k1">┗━━━━━┯━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┯━━━━━━━━━━━━━━━┛</span>     <span class="k2">║</span>
+            │  ┌───────────────────────────────────────────────┐
+            │  │           S U P P O R T I N G                 │
+            │  │  collateral · bls · streamvesting             │
+            │  │  restrictions · genesistransfer               │
+            │  └───────────────────────────────────────────────┘
+            │  <span class="k3">┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┐</span>
+            │  <span class="k3">  G E N E R I C   (берётся готовым / форк)</span>
+   низкое   │  <span class="k3">│ cosmos-sdk: staking* group gov bank feegrant  │</span>
+            │  <span class="k3">   bookkeeper · CometBFT      (*перепрошит)</span>
+            └  <span class="k3">└ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ┘</span>
+              └──────────── строй сам ───────── покупай готовое ──────────►</pre></div>
+    </figure>
+
+    <div class="pull">
+      <div class="big">voting power = PoC score<small>вместо tokens / PowerReduction</small></div>
+      <p>
+        Главный приём — не новый модуль, а перепрошитый чужой. Cosmos SDK <code>x/staking</code>
+        изменён так, что <code>PowerReduction</code> снижен с 1 000 000 до 1, бондинг токенов
+        обойдён, а <code>Slash</code> не сжигает токены: он уменьшает абстрактную compute power
+        и через хук уведомляет <code>x/collateral</code>, который и применяет финансовый штраф.
+        Generic-модуль превращён в носитель Core-идеи.
+      </p>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Поддомен</th><th>Тип</th><th>Где живёт</th><th>Почему так</th></tr></thead>
+        <tbody>
+          <tr><td>Proof of Compute 2.0 — эпохи, веса, валидация</td><td><span class="v v-core">Core</span></td><td class="mono">x/inference</td><td>Уникальный механизм «compute = власть». Это и есть gonka.</td></tr>
+          <tr><td>Devshard — эскроу-канал инференса</td><td><span class="v v-core">Core ↑</span></td><td class="mono">devshard/</td><td>Растущее ядро монетизации: low-latency инференс без цепи на каждый запрос.</td></tr>
+          <tr><td>Оркестрация — dapi</td><td><span class="v v-core">Core</span></td><td class="mono">decentralized-api/</td><td>Связывает консенсус и GPU; вся логика выборки и верификации здесь.</td></tr>
+          <tr><td>Collateral — залог и слэшинг</td><td><span class="v v-sup">Supporting</span></td><td class="mono">x/collateral</td><td>Поддерживает экономику PoC, но это понятная финансовая механика.</td></tr>
+          <tr><td>BLS threshold signing</td><td><span class="v v-sup">Supporting</span></td><td class="mono">x/bls</td><td>Криптографический сервис для cross-chain моста.</td></tr>
+          <tr><td>Streamvesting — вестинг наград</td><td><span class="v v-sup">Supporting</span></td><td class="mono">x/streamvesting</td><td>Экономический планировщик выплат.</td></tr>
+          <tr><td>Restrictions — lockup на bootstrap</td><td><span class="v v-sup">Supporting</span></td><td class="mono">x/restrictions</td><td>Временная политика на период запуска.</td></tr>
+          <tr><td>Genesis transfer</td><td><span class="v v-sup">Supporting</span></td><td class="mono">x/genesistransfer</td><td>Одноразовая операционная нужда — миграция founder-аккаунтов.</td></tr>
+          <tr><td>Bookkeeper — аудит-лог денег</td><td><span class="v v-gen">Generic</span></td><td class="mono">x/bookkeeper</td><td>Декоратор над <code>x/bank</code> ради структурного лога.</td></tr>
+          <tr><td>Консенсус, банк, gov, group, staking</td><td><span class="v v-gen">Generic ✳</span></td><td class="mono">gonka-ai/cosmos-sdk</td><td>Берётся готовым; правится только там, где требует PoC.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Отношения между контекстами</h3>
+    <p>
+      <b>x/inference → спутники</b> — Customer–Supplier с дирижированием: один мастер-часовой
+      на границе эпохи. <b>dapi → chain</b> — Conformist с ACL: цепь единственный источник истины.
+      <b>chain ↔ форк SDK</b> — Shared Kernel: изменения изолированы и задокументированы.
+      <b>devshard → chain</b> — Open Host Service: минимальный публичный протокол, открыть эскроу
+      и рассчитаться. <b>bls → EVM</b> — Published Language: payload кодируется так, чтобы его
+      понял смарт-контракт.
+    </p>
+  </section>
+
+  <section id="clock">
+    <div class="lbl">Стейт-машина</div>
+    <h2>Один такт эпохи — много исполнителей</h2>
+    <p>
+      Вся синхронизация сосредоточена в <code>EndBlock</code> модуля <code>x/inference</code>.
+      Остальные модули — исполнители, вызываемые на границах фаз. Эпоха размечается от
+      <code>PocStartBlockHeight</code>, длина — 40 блоков.
+    </p>
+    <figure class="panel">
+      <div class="panel-bar">
+        <span>панно 4 · <b>такт эпохи</b></span>
+        <span>108 колонок</span>
+      </div>
+      <div class="panel-scroll"><pre class="console">   t ──►  StartOfPoC ─► Generation ─► Validation ─► EndOfPoCValidation ─► SetNewValidators ─► ClaimMoney
+              │             │             │                    │                    │                 │
+              │             │             │      ┌─────────────┴─────────────┐      │                 │
+           seed +       MMR-коммит    SPRT-аудит │ ComputeNewWeights         │  цена unit         recovery
+           группы       (off-chain)   честности  │ settlement · slash        │  SetComputeVal      → награды
+                                                 │ BLS DKG · делегирование   │  (активация H+2)
+                                                 └───────────────────────────┘
+   ── сбой СОСЕДА → epoch_error (цепь живёт);  сбой ЯДРА эпохи → return err (halt) ──</pre></div>
+    </figure>
+
+    <h3>Поток власти: compute → consensus</h3>
+    <p>
+      GPU производит нонсы и расстояния, из них считается потенциальный вес, залог его активирует,
+      вес попадает в <code>x/group</code> и оттуда — в набор валидаторов CometBFT.
+    </p>
+    <figure class="panel">
+      <div class="panel-bar">
+        <span>панно 5 · <b>compute → power</b></span>
+        <span>88 колонок</span>
+      </div>
+      <div class="panel-scroll"><pre class="console">   <span class="k1">GPU ▓▓▓</span>        ┌───────────┐     ┌────────────┐     ┌──────────────┐     ┌─────────┐
+   нонсы +  ───►  │ PoC-вес   │──►  │ + залог    │──►  │ вес в x/group│──►  │ CometBFT│
+   расстояния     │(potential)│     │(activated) │     │ ComputeResult│     │  + gov  │
+                  └───────────┘     └────────────┘     └──────┬───────┘     └─────────┘
+                                                    Genesis Guardian (bootstrap)  ▲
+                                                    кап консенсуса 0.25 ──────────┘</pre></div>
+      <figcaption>
+        Капов два, и это разные числа: консенсус ограничен параметром
+        <code>MaxIndividualPowerPercentage = 0.25</code>, награды — зашитым в код <b>0.30</b>.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section id="flows">
+    <div class="lbl">Потоки</div>
+    <h2>Путь одного запроса</h2>
+    <p>
+      Инференс проходит через двух разных участников dapi: <b>transfer agent</b> принимает запрос
+      и открывает эскроу, <b>executor</b> исполняет его на своём GPU. Разделение неслучайно —
+      тот, кто платит за место в очереди, и тот, кто считает, не должны совпадать. В цепь уходят
+      только хеши; промпт и ответ живут off-chain и остаются верифицируемыми по корню.
+    </p>
+    <figure class="panel">
+      <div class="panel-bar">
+        <span>панно 6 · <b>поток инференса</b></span>
+        <span>106 колонок · sequence</span>
+      </div>
+      <div class="panel-scroll"><pre class="console">Пользователь  dapi · TRANSFER AGENT          dapi · EXECUTOR           <span class="k1">ml node · vLLM</span>             <span class="k2">chain</span>
+    │                   │                           │                         │                     │
+  1 │───────────────────►                           │                         │                     │
+    │ chat/completions  │                           │                         │                     │
+    │                   │ bandwidth limiter → 429 при перегрузе               │                     │
+    │                   │                           │                         │                     │
+  2 │                   │─ MsgStartInference · async · эскроу по PerTokenPrice ─────────────────────►
+    │                   │                           │                         │                     │
+  3 │                   │───────────────────────────►                         │                     │
+    │                   │ forward + X-TA-Signature + PromptHash               │                     │
+    │                   │                           │                         │                     │
+  4 │                   │                           │─────────────────────────►                     │
+    │                   │                           │ inference → locked node, least-busy           │
+    │                   │                           │                         │                     │
+  5 │                   │                           ◄╌╌ SSE-стрим ╌╌╌╌╌╌╌╌╌╌╌╌│                     │
+    │                   │                           │                         │                     │
+  6 ◄╌╌ проксирование · InferenceId в каждом event ╌│                         │                     │
+    │                   │                           │                         │                     │
+  7 │                   │                           │───────────────────────────────────────────────►
+    │                   │                           │ MsgFinishInference · ResponseHash, payload off-chain
+    │                   │                           │                         │                     │
+  8 │                   │                           ◄───────────────────────────────────────────────│
+    │                   │                           │ выборка на валидацию — детерминированная, позже
+    │                   │                           │                         │                     │
+    │ далее: другие участники ре-исполняют запрос (logprobs > 0.99) → MsgValidation → SPRT          │</pre></div>
+      <figcaption>
+        Проверка приходит асинхронно: цепь детерминированно выбирает часть завершённых инференсов,
+        другие участники ре-исполняют их и сверяют logprobs, а поток вердиктов идёт в SPRT —
+        критерий Вальда с порогом <code>H = 4</code>.
+      </figcaption>
+    </figure>
+
+    <h3>Devshard: жизненный цикл эскроу</h3>
+    <p>
+      Канал существует ради одного — убрать цепь с горячего пути. Пользователь сам выступает
+      секвенсором и нумерует запросы; нонс одновременно служит идентификатором инференса
+      и ключом маршрутизации на хост <code>group[nonce % 16]</code>. Цепь трогается ровно дважды.
+    </p>
+    <figure class="panel">
+      <div class="panel-bar">
+        <span>панно 7 · <b>эскроу-канал</b></span>
+        <span>85 колонок</span>
+      </div>
+      <div class="panel-scroll"><pre class="console">┌ 1 ────────────────┐       ┌ 2 ────────────────┐       ┌ 3 ────────────────┐
+│ MsgCreate         │       │ пользователь —    │       │ хост исполняет    │
+│ DevshardEscrow    │ ───►  │ секвенсор         │ ───►  │ + co-sign         │
+│ лочит amount      │       │ Diff{nonce, txs,  │ nonce │ state root        │
+│ группа: 16 слотов │       │       user-sig}   │ % 16  │                   │
+└───────────────────┘       └───────────────────┘       └───────────────────┘
+                                                                  │ gossip + recovery
+                                                                  ▼
+┌ 6 ────────────────┐       ┌ 5 ────────────────┐       ┌ 4 ────────────────┐
+│ выплата Cost      │       │ MsgSettle         │       │ пиры собирают     │
+│ хостам, остаток — │ ◄───  │ DevshardEscrow    │ ◄───  │ подписи           │
+│ пользователю      │       │ пересчёт root     │       │ gossip K=10       │
+│                   │       │ кворум 2/3 + 1    │       │ recovery 60s      │
+└───────────────────┘       └───────────────────┘       └───────────────────┘</pre></div>
+    </figure>
+
+    <h3>Мост: обе стороны</h3>
+    <p>
+      Вход в сеть авторизуется властью валидаторов, выход — пороговой подписью BLS живой эпохи.
+      Асимметрия осознанная: снаружи внутрь достаточно голосования, изнутри наружу нужна подпись,
+      которую проверит смарт-контракт, ничего не знающий про Cosmos.
+    </p>
+    <figure class="panel">
+      <div class="panel-bar">
+        <span>панно 8 · <b>EVM-мост</b></span>
+        <span>96 колонок</span>
+      </div>
+      <div class="panel-scroll"><pre class="console">┌─────────────── <span class="k2">EVM → GONKA</span> ────────────────┐    ┌─────────────── <span class="k2">GONKA → EVM</span> ────────────────┐
+│ депозит на BridgeContract (WGNK)           │    │ MsgRequestBridgeMint / Withdrawal          │
+│ ▼                                          │    │ ▼                                          │
+│ релеер: geth + prysm ловит событие         │    │ эскроу в bridge_escrow                     │
+│ ▼                                          │    │ ▼                                          │
+│ валидаторы шлют MsgBridgeExchange          │    │ BLS threshold signature (BLS12-381)        │
+│   порог входа — > 50% власти               │    │   провал → AfterThresholdSigning-          │
+│ ▼                                          │    │   Failed → авто-возврат эскроу             │
+│ минт CW20 / релиз нативного                │    │ ▼                                          │
+│                                            │    │ mintWithSignature / withdraw на EVM        │
+│                                            │    │   EIP-2537 на стороне контракта            │
+└────────────────────────────────────────────┘    └────────────────────────────────────────────┘</pre></div>
+      <figcaption>
+        Провал порогового подписания не подвешивает средства: хук
+        <code>AfterThresholdSigningFailed</code> возвращает эскроу автоматически.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section id="principles">
+    <div class="lbl">Сквозные принципы</div>
+    <h2>Семь правил, которые держат систему</h2>
+
+    <div class="dec"><div class="id">01</div><div>
+      <h4>Compute и есть stake</h4>
+      <p>PoC-вес → вес участника в Cosmos <code>x/group</code> → <code>ComputeResult.Power</code> → voting power в CometBFT.</p>
+    </div></div>
+    <div class="dec"><div class="id">02</div><div>
+      <h4>Один часовой — много исполнителей</h4>
+      <p>Синхронизация эпох живёт только в <code>EndBlock</code> ядра; остальные модули вызываются на границах фаз.</p>
+    </div></div>
+    <div class="dec"><div class="id">03</div><div>
+      <h4>Дисциплина детерминизма</h4>
+      <p>Любой «случайный» выбор — <code>DeterministicFloat</code> и SHA-256 от сидов. Арифметика на <code>shopspring/decimal</code> или рядах Тейлора, никогда <code>math.*</code> float на пути консенсуса.</p>
+    </div></div>
+    <div class="dec"><div class="id">04</div><div>
+      <h4>On-chain только обязательства</h4>
+      <p>В цепь идут хеши, корни MMR, счётчики. Промпты, ответы и артефакты PoC живут off-chain с прунингом по эпохам.</p>
+    </div></div>
+    <div class="dec"><div class="id">05</div><div>
+      <h4>Экономика без перераспределения</h4>
+      <p>Слэш и любые недополученные, обрезанные или просроченные награды уходят в gov-аккаунт. Честные участники никогда не «доедают» чужие потери.</p>
+    </div></div>
+    <div class="dec"><div class="id">06</div><div>
+      <h4>Гибридная безопасность</h4>
+      <p>GPU-compute даёт потенциальный вес, но большую его часть нужно активировать залогом (<code>BaseWeightRatio = 0.2</code>), который слэшится за плохое поведение.</p>
+    </div></div>
+    <div class="dec"><div class="id">07</div><div>
+      <h4>Эскроу-каналы для масштаба</h4>
+      <p>Пользователь — секвенсор, нонс = id инференса = ключ маршрутизации, хосты со-подписывают детерминированный state root, цепь трогается лишь дважды.</p>
+    </div></div>
+  </section>
+
+  <section id="verify">
+    <div class="lbl">Состязательная сверка</div>
+    <h2>Что документация утверждала, а код опроверг</h2>
+    <p>
+      Разбор прошёл отдельным проходом против исходников с явной целью найти ошибки, а не
+      подтвердить их отсутствие. Из ~30 ключевых утверждений подтверждены точь-в-точь ~24,
+      исправлены 4, два непроверяемы в этом checkout: форк staking лежит вне репозитория.
+      Числовые параметры — награды, залог, ценообразование, SPRT, devshard — оказались
+      точными до цифры.
+    </p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Было в доках</th><th>Как на самом деле</th></tr></thead>
+        <tbody>
+          <tr><td>Один кап власти 0.25 на всё</td><td>Два разных капа: консенсус <code>MaxIndividualPowerPercentage</code> = 0.25, награды — зашитые 0.30.</td></tr>
+          <tr><td>BLS: <code>i_total_slots = 1000</code> в проде</td><td>В живом genesis 100, offset 50. «1000» — лишь комментарий-цель в коде.</td></tr>
+          <tr><td>Форк <code>product-science/cosmos-sdk</code></td><td>Реальная зависимость — <code>gonka-ai/cosmos-sdk v0.53.3-ps17-observability</code>; внутренний changelog сам устарел.</td></tr>
+          <tr><td>«Ошибки не валят цепь»</td><td>Глушатся только ошибки соседних модулей; сбой ядра эпохи возвращает ошибку и останавливает цепь.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Главная находка</h3>
+    <p>
+      <b>Обучение (DiLoCo) — не roadmap и не live-фича, а удалённая.</b> README проекта всё ещё
+      рекламирует geo-distributed training, но on-chain координация обучения была вырезана
+      в v0.2.12. ML-движок реален и работает автономно, связи с цепью у него нет.
+    </p>
+    <p>
+      Второе, что легко упустить: <b>genesis-значения не равны действующим</b>. Upgrade-хендлеры
+      мутируют параметры. Genesis Guardian задан в genesis как <code>m = 0.52</code>, но на слое
+      v0.2.13 действует <code>0.33334</code> с порогом 15M и min-height 3M. Сверять параметры
+      нужно по каталогу апгрейдов, а не по genesis.json.
+    </p>
+  </section>
+
+  <section id="docs">
+    <div class="lbl">Навигатор</div>
+    <h2>Карта разбора</h2>
+    <p>
+      Разбор разложен по высоте: с птичьего полёта — ANSI, средний уровень — mermaid-карты
+      потоков, земля — тактические разборы по контекстам. Плюс «второй мозг»: 31 атомарная
+      заметка в стиле distill-from-first-principles.
+    </p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Документ</th><th>Формат</th><th>Содержание</th></tr></thead>
+        <tbody>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/blob/main/architecture/helicopter-view.md">helicopter-view</a></td><td>ANSI · 6 панелей</td><td>Вся система на одном экране: планы, поддомены, зависимости, такт эпохи, поток власти.</td></tr>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/blob/main/ARCHITECTURE.md">ARCHITECTURE</a></td><td>mermaid · 2</td><td>Точка входа: Context Map, классификация поддоменов, Ubiquitous Language.</td></tr>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/blob/main/architecture/00-system-map.md">00 · system-map</a></td><td>mermaid · 6</td><td>Мастер-карта плюс потоки: власть, инференс, эпоха, devshard, мост.</td></tr>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/blob/main/architecture/01-core-proof-of-compute.md">01 · core</a></td><td>разбор</td><td>Ядро домена: эпохи, PoC 2.0, валидация инференса (SPRT), вес → консенсус.</td></tr>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/blob/main/architecture/02-supporting-contexts.md">02 · supporting</a></td><td>разбор</td><td>BLS-порог, collateral, streamvesting, restrictions, genesistransfer, bookkeeper.</td></tr>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/blob/main/architecture/03-orchestration-dapi.md">03 · dapi</a></td><td>разбор</td><td>Off-chain оркестратор: broker, фазовый трекер, PoC-конвейер, роутинг.</td></tr>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/blob/main/architecture/04-devshard-payment-channel.md">04 · devshard</a></td><td>разбор</td><td>Эскроу-канал стримингового инференса — заголовочная фича слоя.</td></tr>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/blob/main/architecture/05-economics.md">05 · экономика</a></td><td>разбор</td><td>Токеномика V2: bitcoin-эмиссия, collateral, vesting, динамическое ценообразование.</td></tr>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/blob/main/architecture/06-ideas-catalog.md">06 · идеи</a></td><td>каталог</td><td>Переносимые инженерные приёмы, извлечённые из кода.</td></tr>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/blob/main/architecture/07-mlnode-compute.md">07 · ml-узел</a></td><td>разбор</td><td>Математика PoC (расстояние на сфере), две реализации, валидация, vLLM.</td></tr>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/blob/main/architecture/08-bridge-and-protocol.md">08 · мост</a></td><td>разбор</td><td>EVM-мост end-to-end на BLS-авторизации плюс каталог proto-сообщений.</td></tr>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/blob/main/architecture/09-testing-and-evolution.md">09 · эволюция</a></td><td>разбор</td><td>Testermint, каденция апгрейдов, судьба обучения.</td></tr>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/blob/main/architecture/10-deep-mechanisms.md">10 · механизмы</a></td><td>разбор</td><td>Динамическое ценообразование (EIP-1559), devshard gossip и recovery, genesis guardian.</td></tr>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/blob/main/architecture/11-advanced-subsystems.md">11 · подсистемы</a></td><td>разбор</td><td>PoC-делегирование N→1, анатомия апгрейда v0.2.12, bandwidth-лимитер.</td></tr>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/blob/main/REVIEW.md">REVIEW</a></td><td>верификация</td><td>Сверка доков против кода: подтверждено, исправлено, непроверяемо.</td></tr>
+          <tr><td class="mono"><a href="https://github.com/yunusovt983-art/gonka/tree/main/Wiki">Wiki/</a></td><td>31 заметка</td><td>Атомарные взаимосвязанные заметки второго мозга. Точка входа — MOC.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer>
+    <div>Temur Yunusov · <a href="https://github.com/yunusovt983-art/gonka">github.com/yunusovt983-art/gonka</a> · <a href="https://yunusovt983-art.github.io/">архитектурные атласы</a></div>
+    <div>Слой 8a35022 · v0.2.13-devshard-v2 · 19 июня 2026 — параметры и схемы отражают именно его.</div>
+    <div>Исходный код gonka — Gonka License (© Product Science, Inc.). Архитектурный обзор — AGPL-3.0.</div>
+  </footer>
+</div>
+</body>
+</html>
